@@ -42,7 +42,7 @@ pub fn register() -> Termenu {
                 }
 
                 // Create the command file
-                fs::write(&path, generate_command_template(&command_name)).map_err(|e| {
+                fs::write(path, generate_command_template(&command_name)).map_err(|e| {
                     TermenuError::connection_unknown_error(Some(json!( {
                         "issue": format!("Failed to create file: {}", e)
                     })))
@@ -53,11 +53,11 @@ pub fn register() -> Termenu {
                 let mod_line = format!("pub mod {}_command;\n", command_name.to_lowercase());
 
                 if mod_file_path.exists() {
-                    let mut content = fs::read_to_string(&mod_file_path).unwrap_or_default();
+                    let content = fs::read_to_string(mod_file_path).unwrap_or_default();
                     if !content.contains(&mod_line) {
                         let mut file = fs::OpenOptions::new()
                             .append(true)
-                            .open(&mod_file_path)
+                            .open(mod_file_path)
                             .map_err(|e| {
                                 TermenuError::connection_unknown_error(Some(json!( {
                                     "issue": format!("Failed to open mod.rs: {}", e)
@@ -111,6 +111,7 @@ pub fn register() -> Termenu {
     command
 }
 
+#[warn(unused_variables)]
 fn generate_command_template(name: &str) -> String {
     let struct_name = format!("{}Command", capitalize_first_letter(&name.to_lowercase()));
     format!(
