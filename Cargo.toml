@@ -1,0 +1,23 @@
+[package]
+name = "termenu"
+version = "0.1.0"
+edition = "2024"
+authors = ["Surelle"]
+description = "An awesome Rust project"
+license = "MIT"
+
+[dependencies]
+toml = "0.7"
+colored = "3.0.0"
+figlet-rs = "0.1.5"
+reqwest = "0.12.24"
+serde = "1.0.228"
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tokio = { version = "1", features = ["full", "macros"] }
+
+[dependencies.uuid]
+version = "1.18.1"
+features = [
+    "v4",
+]

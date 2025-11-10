@@ -1,0 +1,19 @@
+[tasks.dev-prepare-linux]
+description = "Prepare development environment for Linux"
+script = [
+    "sudo apt update && sudo apt upgrade -y",
+    "sudo apt install -y build-essential pkg-config libssl-dev curl git"
+]
+
+[tasks.clean]
+description = "Clean the target directory"
+command = "cargo"
+args = ["clean"]
+
+[tasks.build]
+command = "cargo"
+args = ["build"]
+
+[tasks.build-release]
+command = "cargo"
+args = ["build", "--release"]
