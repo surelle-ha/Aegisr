@@ -1,4 +1,6 @@
 use aegisr_engine::{AegCore, AegFileSystem, AegisrCommand};
+use serde::Deserialize;
+use std::fs;
 use std::net::SocketAddr;
 use std::process;
 use std::thread;
@@ -7,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::signal;
 
+use clap::Parser;
 use hostname::get as get_hostname;
 use tracing::{debug, error, info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -27,28 +30,43 @@ impl Default for LoggerConfig {
     }
 }
 
-/// Initialize tracing subscriber:
-/// - Console logs
-/// - Optional daily-rotating file logs (non-blocking writer)
+/// JSON config structure
+#[derive(Debug, Deserialize)]
+struct DaemonConfig {
+    host: Option<String>,
+    port: Option<u16>,
+}
+
+/// CLI arguments
+#[derive(Parser, Debug)]
+#[command(author, version, about = "AEGISR Daemon")]
+struct CliArgs {
+    /// Host to listen on
+    #[arg(short = 'H', long)]
+    host: Option<String>,
+
+    /// Port to listen on
+    #[arg(short, long)]
+    port: Option<u16>,
+
+    /// Config JSON file
+    #[arg(short, long)]
+    config: Option<String>,
+}
+
+/// Initialize tracing subscriber
 fn init_tracing(cfg: &LoggerConfig) {
     let env_filter = EnvFilter::try_new(&cfg.level).unwrap_or_else(|_| EnvFilter::new("info"));
-
-    // Console pretty layer
     let console_layer = fmt::layer().pretty().with_target(false).with_ansi(true);
-
     let base_sub = Registry::default().with(env_filter).with(console_layer);
 
     if cfg.log_to_file {
-        // Create daemon log directory
         let mut log_dir = AegFileSystem::get_config_path();
         std::fs::create_dir_all(&log_dir).ok();
         log_dir.push("logs");
         std::fs::create_dir_all(&log_dir).ok();
 
-        // Daily rotation
         let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "daemon.log");
-
-        // IMPORTANT: use non_blocking() instead of clone()
         let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
 
         let file_layer = fmt::layer()
@@ -87,9 +105,10 @@ impl AegDaemon {
     }
 
     pub async fn start(&self) {
+        AegFileSystem::validate_files();
+
         init_tracing(&self.logger_cfg);
         self.print_banner();
-
         self.spawn_background_worker();
 
         info!(
@@ -161,61 +180,135 @@ impl AegDaemon {
     }
 
     fn print_banner(&self) {
-        info!("======================================");
-        info!("        AEGISR DAEMON STARTED         ");
-        info!("--------------------------------------");
-        info!(host = %self.hostname, pid = self.pid, listen = %self.address, "Daemon Info");
-        info!("======================================");
+        let reset = "\x1b[0m";
+        let green = "\x1b[32m";
+        let cyan = "\x1b[36m";
+        let yellow = "\x1b[33m";
+
+        println!("{}======================================{}", green, reset);
+        println!("{}        AEGISR DAEMON STARTED         {}", cyan, reset);
+        println!("{}--------------------------------------{}", yellow, reset);
+        println!(
+            "{}Daemon Info{} \n \t host: {} \n \t pid: {} \n \t listen: {}",
+            green, reset, self.hostname, self.pid, self.address
+        );
+        println!("{}======================================{}", green, reset);
     }
 }
 
-/// Command handler
 async fn handle_command(cmd: AegisrCommand) -> String {
     match cmd {
+        AegisrCommand::New { verbose, name } => {
+            let resp = AegCore::create_collection(&name);
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            resp
+        }
+        AegisrCommand::Delete { verbose, name } => {
+            let resp = AegCore::delete_collection(&name);
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            resp
+        }
+        AegisrCommand::Rename {
+            verbose,
+            name,
+            new_name,
+        } => {
+            let resp = AegCore::rename_collection(&name, &new_name);
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            resp
+        }
+        AegisrCommand::Use { verbose, name } => {
+            // always reload fresh
+            let mut engine = AegCore::load();
+            debug!("Collections loaded from disk: {:?}", engine.collections);
+
+            match engine.set_active_collection(&name) {
+                Ok(_) => {
+                    if verbose {
+                        info!("Verbose: switched to '{}'", name);
+                    }
+                    format!("✓ Active Collection: {}", name)
+                }
+                Err(e) => {
+                    error!("Failed to switch to '{}': {}", name, e);
+                    format!("✗ Failed to switch to '{}': {}", name, e)
+                }
+            }
+        }
+
         AegisrCommand::Init { verbose, reset } => {
             if reset {
                 warn!("Reset requested — clearing engine files");
                 AegFileSystem::reset_files();
             }
-            info!("Validating engine files");
-            AegFileSystem::validate_files();
 
-            let engine: AegCore = AegCore::load();
+            info!("Initializing engine files");
+            let config_path = AegFileSystem::initialize_config(Some(true), Some(verbose));
+
+            // Always reload fresh after initialization
+            let mut engine = AegCore::load();
+
+            // Ensure at least the default collection exists
+            if engine.collections.is_empty() {
+                engine.collections.push("default".to_string());
+            }
+            if engine.active_collection.is_empty() {
+                engine.active_collection = engine.collections[0].clone();
+            }
+
+            // Save back to collection.lock
             engine.save();
 
             if verbose {
-                info!("Verbose: init completed");
+                info!("Verbose: init completed at {}", config_path.display());
             }
 
             format!(
                 "✓ Engine initialized. Active Collection: {}",
-                AegCore::load().get_active_collection()
+                engine.get_active_collection()
             )
-        }
-
-        AegisrCommand::Use { verbose, name } => {
-            info!(%name, "Switching active collection");
-
-            let mut engine = AegCore::load();
-            engine.set_active_collection(&name);
-            engine.save();
-
-            if verbose {
-                info!("Verbose: collection switched");
-            }
-
-            format!("✓ Active Collection: {}", engine.get_active_collection())
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
+    let args = CliArgs::parse();
+
+    // Load config file if provided
+    let file_config = if let Some(cfg_path) = &args.config {
+        let cfg_str = fs::read_to_string(cfg_path)
+            .unwrap_or_else(|_| panic!("Failed to read config file: {}", cfg_path));
+        serde_json::from_str::<DaemonConfig>(&cfg_str).unwrap_or(DaemonConfig {
+            host: None,
+            port: None,
+        })
+    } else {
+        DaemonConfig {
+            host: None,
+            port: None,
+        }
+    };
+
+    // Determine host and port: CLI > config file > default
+    let host = args.host.or(file_config.host).unwrap_or("127.0.0.1".into());
+    let port = args.port.or(file_config.port).unwrap_or(1211);
+
+    let address = format!("{}:{}", host, port);
+
     let logger_cfg = LoggerConfig {
         log_to_file: true,
         level: std::env::var("AEGISR_LOG_LEVEL").unwrap_or("info".into()),
     };
 
-    let daemon = AegDaemon::new("127.0.0.1:8080", logger_cfg);
+    AegFileSystem::validate_files();
+
+    let daemon = AegDaemon::new(&address, logger_cfg);
     daemon.start().await;
 }

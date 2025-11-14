@@ -46,3 +46,32 @@ Aegisr KVD is a next-generation in-memory data store designed to overcome the li
 
 > This section is a placeholder for future setup instructions.
 
+## Launching the Aegisr Daemon
+
+The Aegisr daemon must be running to operate the terminal interface. Use one of the commands below to start the daemon:
+
+```bash
+# Start the daemon on the default address 127.0.0.1:1211
+./aegisr-daemon
+
+# Bind the daemon to a custom host and port
+./aegisr-daemon -H 0.0.0.0 -p 9090
+
+# Start the daemon using a JSON configuration file
+./aegisr-daemon -c <path_to_config_file>
+```
+
+### Example Configuration File
+
+Create a JSON file to specify the host and port:
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 9000
+}
+```
+
+> (1) Command-line options (-H for host, -p for port) override settings in the configuration file.
+> (2) If neither command-line options nor a config file are provided, the daemon defaults to listening on 127.0.0.1:1211.
+> (3) Ensure the specified host and port are available and not blocked by a firewall.
