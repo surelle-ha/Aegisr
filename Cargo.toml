@@ -6,22 +6,22 @@ authors = ["Surelle"]
 description = "Aegisr"
 license = "MIT"
 
+[[bin]]
+name = "aegisr"
+path = "src/bin/terminal.rs"
+
+[[bin]]
+name = "aegisr-daemon"
+path = "src/bin/daemon.rs"
+
 [dependencies]
-toml = "0.7"
 colored = "3.0.0"
-figlet-rs = "0.1.5"
-reqwest = "0.12.24"
+aegisr_engine = { path = "./lib/aegisr_engine" }
+tokio = { version = "1", features = ["full", "macros"] }
+clap = { version = "4.5.51", features = ["derive"] }
 serde = "1.0.228"
 serde_json = "1.0.145"
-thiserror = "2.0.17"
-tokio = { version = "1", features = ["full", "macros"] }
-dirs-next = "2.0"
-base64 = "0.22.1"
-rand = "0.9.2"
-blake3 = "1.8.2"
-
-[dependencies.uuid]
-version = "1.18.1"
-features = [
-    "v4",
-]
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "ansi"] }
+tracing-appender = "0.2"
+hostname = "0.4"
