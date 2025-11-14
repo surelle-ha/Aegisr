@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aegisr"
-version = "0.1.0"
+version = "1.0.1-beta"
 dependencies = [
  "aegisr_engine",
  "clap",
