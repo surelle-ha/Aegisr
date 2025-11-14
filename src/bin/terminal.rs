@@ -34,6 +34,7 @@ impl AegTerminal {
                 verbose: args.verbose,
                 reset: args.reset,
             },
+            Commands::List => AegisrCommand::List,
             Commands::Use(args) => AegisrCommand::Use {
                 verbose: args.verbose,
                 name: args.name.clone(),

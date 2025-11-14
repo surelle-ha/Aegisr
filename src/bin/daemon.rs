@@ -205,6 +205,18 @@ async fn handle_command(cmd: AegisrCommand) -> String {
             }
             resp
         }
+        AegisrCommand::List => {
+            let engine = AegCore::load();
+            if engine.collections.is_empty() {
+                "No collections found".to_string()
+            } else {
+                let mut output = String::from("✓ Collections:\n");
+                for collection in engine.collections {
+                    output.push_str(&format!("• {}\n", collection));
+                }
+                output
+            }
+        }
         AegisrCommand::Delete { verbose, name } => {
             let resp = AegCore::delete_collection(&name);
             if verbose {

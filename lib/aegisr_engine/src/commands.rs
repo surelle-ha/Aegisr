@@ -69,6 +69,7 @@ pub struct RenameArgs {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Init(InitArgs),
+    List,
     Use(UseArgs),
     New(NewArgs),
     Delete(DeleteArgs),
@@ -81,6 +82,7 @@ pub enum AegisrCommand {
         verbose: bool,
         reset: bool,
     },
+    List,
     Use {
         verbose: bool,
         name: String,
