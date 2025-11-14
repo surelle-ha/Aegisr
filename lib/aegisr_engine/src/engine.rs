@@ -11,7 +11,7 @@ use zeroize::Zeroize;
 pub const RUNTIME_NAME: &str = "Aegisr";
 pub const ENGINE_NAME: &str = "Aegisr Engine (Dusk)";
 pub const ENGINE_DEVELOPER: &[&str] = &["surelle-ha"];
-pub const ENGINE_VERSION: &str = "1.0.0-beta";
+pub const ENGINE_VERSION: &str = "1.0.1-beta";
 pub const STORE_DIR: &str = ".aegisr";
 pub const STORE_CONFIG_AEG: &str = "config.aeg";
 pub const STORE_ENGINE_STATE: &str = "engine_state.json";
