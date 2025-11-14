@@ -13,36 +13,36 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        platform: [x86_64-unknown-linux-gnu]
+        platform: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-apple-darwin]
 
     steps:
-      # Checkout code
+      # 1. Checkout code
       - uses: actions/checkout@v3
 
-      # Install Rust toolchain
+      # 2. Setup Rust toolchain
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
 
-      # Build release executable
+      # 3. Build release binaries
       - name: Build Release
         run: cargo build --release --target ${{ matrix.platform }}
 
-      # Package artifacts
+      # 4. Package artifacts
       - name: Package Artifact
         run: |
           mkdir -p release
           if [[ "${{ matrix.platform }}" == "x86_64-unknown-linux-gnu" ]]; then
-            tar -czvf release/mydb-linux.tar.gz -C target/${{ matrix.platform }}/release mydb
+            tar -czvf release/aegisr-linux.tar.gz -C target/${{ matrix.platform }}/release aegisr aegisr-daemon
           elif [[ "${{ matrix.platform }}" == "x86_64-pc-windows-gnu" ]]; then
-            powershell Compress-Archive -Path target\${{ matrix.platform }}\release\mydb.exe -DestinationPath release\mydb-windows.zip
+            powershell Compress-Archive -Path target\${{ matrix.platform }}\release\aegisr.exe,target\${{ matrix.platform }}\release\aegisr-daemon.exe -DestinationPath release\aegisr-windows.zip
           elif [[ "${{ matrix.platform }}" == "x86_64-apple-darwin" ]]; then
-            tar -czvf release/mydb-macos.tar.gz -C target/${{ matrix.platform }}/release mydb
+            tar -czvf release/aegisr-macos.tar.gz -C target/${{ matrix.platform }}/release aegisr aegisr-daemon
           fi
 
-      # Upload artifacts to GitHub Release
+      # 5. Upload artifacts to GitHub Release
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
