@@ -12,6 +12,12 @@
       "type": "shell",
       "command": "cargo build --release",
       "problemMatcher": []
+    },
+    {
+      "label": "Show ToDo List",
+      "type": "shell",
+      "command": "grep -Rn \"// TODO\" src/",
+      "problemMatcher": []
     }
   ]
 }
