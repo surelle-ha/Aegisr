@@ -1,0 +1,51 @@
+name: '📦 Rust Multi-Platform Release'
+
+on:
+  push:
+    branches:
+      - main
+      - w-test/*
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-apple-darwin]
+
+    steps:
+      # Checkout code
+      - uses: actions/checkout@v3
+
+      # Install Rust toolchain
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      # Build release executable
+      - name: Build Release
+        run: cargo build --release --target ${{ matrix.platform }}
+
+      # Package artifacts
+      - name: Package Artifact
+        run: |
+          mkdir -p release
+          if [[ "${{ matrix.platform }}" == "x86_64-unknown-linux-gnu" ]]; then
+            tar -czvf release/mydb-linux.tar.gz -C target/${{ matrix.platform }}/release mydb
+          elif [[ "${{ matrix.platform }}" == "x86_64-pc-windows-gnu" ]]; then
+            powershell Compress-Archive -Path target\${{ matrix.platform }}\release\mydb.exe -DestinationPath release\mydb-windows.zip
+          elif [[ "${{ matrix.platform }}" == "x86_64-apple-darwin" ]]; then
+            tar -czvf release/mydb-macos.tar.gz -C target/${{ matrix.platform }}/release mydb
+          fi
+
+      # Upload artifacts to GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
