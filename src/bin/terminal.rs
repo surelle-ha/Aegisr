@@ -52,6 +52,7 @@ impl AegTerminal {
                 name: args.name.clone(),
                 new_name: args.new_name.clone(),
             },
+            Commands::Status => AegisrCommand::Status,
         };
 
         // Send command

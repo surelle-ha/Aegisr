@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 // INIT COMMAND
 // ================
 #[derive(Args, Debug)]
+#[command(about = "Initialize the Aegisr engine")]
 pub struct InitArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
 
-    #[arg(short, long)]
+    #[arg(short, long, help = "Reset existing data before initialization")]
     pub reset: bool,
 }
 
@@ -17,11 +18,12 @@ pub struct InitArgs {
 // USE COMMAND
 // ================
 #[derive(Args, Debug)]
+#[command(about = "Switch the active collection")]
 pub struct UseArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
 
-    #[arg()]
+    #[arg(help = "Name of the collection to use")]
     pub name: String,
 }
 
@@ -29,11 +31,12 @@ pub struct UseArgs {
 // NEW COMMAND
 // ================
 #[derive(Args, Debug)]
+#[command(about = "Create a new collection")]
 pub struct NewArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
 
-    #[arg()]
+    #[arg(help = "Name of the new collection")]
     pub name: String,
 }
 
@@ -41,11 +44,12 @@ pub struct NewArgs {
 // DELETE COMMAND
 // ================
 #[derive(Args, Debug)]
+#[command(about = "Delete an existing collection")]
 pub struct DeleteArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
 
-    #[arg()]
+    #[arg(help = "Name of the collection to delete")]
     pub name: String,
 }
 
@@ -53,14 +57,15 @@ pub struct DeleteArgs {
 // RENAME COMMAND
 // ================
 #[derive(Args, Debug)]
+#[command(about = "Rename a collection")]
 pub struct RenameArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
 
-    #[arg()]
+    #[arg(help = "Current name of the collection")]
     pub name: String,
 
-    #[arg()]
+    #[arg(help = "New name for the collection")]
     pub new_name: String,
 }
 
@@ -68,12 +73,26 @@ pub struct RenameArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    #[command(about = "Initialize the Aegisr engine")]
     Init(InitArgs),
+
+    #[command(about = "List all collections")]
     List,
+
+    #[command(about = "Switch the active collection")]
     Use(UseArgs),
+
+    #[command(about = "Create a new collection")]
     New(NewArgs),
+
+    #[command(about = "Delete an existing collection")]
     Delete(DeleteArgs),
+
+    #[command(about = "Rename a collection")]
     Rename(RenameArgs),
+
+    #[command(about = "Show the currently active collection")]
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -100,4 +119,5 @@ pub enum AegisrCommand {
         name: String,
         new_name: String,
     },
+    Status,
 }

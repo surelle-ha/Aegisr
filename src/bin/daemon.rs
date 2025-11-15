@@ -1,4 +1,6 @@
 use aegisr_engine::{AegCore, AegFileSystem, AegisrCommand};
+use clap::Parser;
+use hostname::get as get_hostname;
 use serde::Deserialize;
 use std::fs;
 use std::net::SocketAddr;
@@ -8,9 +10,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::signal;
-
-use clap::Parser;
-use hostname::get as get_hostname;
 use tracing::{debug, error, info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt};
@@ -186,7 +185,7 @@ impl AegDaemon {
         let yellow = "\x1b[33m";
 
         println!("{}======================================{}", green, reset);
-        println!("{}        AEGISR DAEMON STARTED         {}", cyan, reset);
+        println!("{}            AEGISR DAEMON             {}", cyan, reset);
         println!("{}--------------------------------------{}", yellow, reset);
         println!(
             "{}Daemon Info{} \n \t host: {} \n \t pid: {} \n \t listen: {}",
@@ -206,7 +205,7 @@ async fn handle_command(cmd: AegisrCommand) -> String {
             resp
         }
         AegisrCommand::List => {
-            let engine = AegCore::load();
+            let engine: AegCore = AegCore::load();
             if engine.collections.is_empty() {
                 "No collections found".to_string()
             } else {
@@ -236,7 +235,6 @@ async fn handle_command(cmd: AegisrCommand) -> String {
             resp
         }
         AegisrCommand::Use { verbose, name } => {
-            // always reload fresh
             let mut engine = AegCore::load();
             debug!("Collections loaded from disk: {:?}", engine.collections);
 
@@ -261,7 +259,7 @@ async fn handle_command(cmd: AegisrCommand) -> String {
             }
 
             info!("Initializing engine files");
-            let config_path = AegFileSystem::initialize_config(Some(true), Some(verbose));
+            let config_path = AegFileSystem::initialize_config(Some(reset), Some(verbose));
 
             // Always reload fresh after initialization
             let mut engine = AegCore::load();
@@ -285,6 +283,14 @@ async fn handle_command(cmd: AegisrCommand) -> String {
                 "✓ Engine initialized. Active Collection: {}",
                 engine.get_active_collection()
             )
+        }
+        AegisrCommand::Status => {
+            let engine = AegCore::load();
+            if engine.active_collection.is_empty() {
+                "null".to_string()
+            } else {
+                engine.active_collection.clone()
+            }
         }
     }
 }
