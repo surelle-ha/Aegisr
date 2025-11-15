@@ -18,12 +18,12 @@ impl AegTerminal {
 
         // Connect to daemon
         let mut stream = match TcpStream::connect_timeout(
-            &"127.0.0.1:8080".parse().unwrap(),
+            &"127.0.0.1:1211".parse().unwrap(),
             Duration::from_secs(1),
         ) {
             Ok(s) => s,
             Err(_) => {
-                eprintln!("{}", "Error: Daemon is not running.".red().bold());
+                eprintln!("{}", "Error: Aegisr daemon is not running.".red().bold());
                 std::process::exit(1);
             }
         };
@@ -34,10 +34,25 @@ impl AegTerminal {
                 verbose: args.verbose,
                 reset: args.reset,
             },
+            Commands::List => AegisrCommand::List,
             Commands::Use(args) => AegisrCommand::Use {
                 verbose: args.verbose,
                 name: args.name.clone(),
             },
+            Commands::New(args) => AegisrCommand::New {
+                verbose: args.verbose,
+                name: args.name.clone(),
+            },
+            Commands::Delete(args) => AegisrCommand::Delete {
+                verbose: args.verbose,
+                name: args.name.clone(),
+            },
+            Commands::Rename(args) => AegisrCommand::Rename {
+                verbose: args.verbose,
+                name: args.name.clone(),
+                new_name: args.new_name.clone(),
+            },
+            Commands::Status => AegisrCommand::Status,
         };
 
         // Send command

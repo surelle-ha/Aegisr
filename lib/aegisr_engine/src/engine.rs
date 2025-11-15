@@ -1,8 +1,11 @@
+use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::{Engine as _, engine::general_purpose};
 use dirs_next::home_dir;
 use rand_core::{OsRng, TryRngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -13,12 +16,19 @@ pub const ENGINE_NAME: &str = "Aegisr Engine (Dusk)";
 pub const ENGINE_DEVELOPER: &[&str] = &["surelle-ha"];
 pub const ENGINE_VERSION: &str = "1.0.1-beta";
 pub const STORE_DIR: &str = ".aegisr";
+pub const STORE_COLLECTION: &str = "collection.lock";
 pub const STORE_CONFIG_AEG: &str = "config.aeg";
 pub const STORE_ENGINE_STATE: &str = "engine_state.json";
 pub const STORE_AUTHORIZATION_KEY: &str = "AUTHORIZATION_KEY";
 
 // ===================== FILESYSTEM =====================
 pub struct AegFileSystem;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CollectionLock {
+    pub active: String,
+    pub collections: Vec<String>,
+}
 
 impl AegFileSystem {
     pub fn get_config_path() -> PathBuf {
@@ -30,6 +40,7 @@ impl AegFileSystem {
         config_path
     }
 
+    /// Remove the whole config directory and recreate it (keeps it empty).
     pub fn reset_files() {
         let path = Self::get_config_path();
         if path.exists() {
@@ -38,18 +49,29 @@ impl AegFileSystem {
         fs::create_dir_all(&path).expect("Failed to recreate config directory");
     }
 
+    /// Ensure required files exist; if not, initialize them.
     pub fn validate_files() {
         let path = Self::get_config_path();
+        let collection_lock: PathBuf = path.join(STORE_COLLECTION);
         let config_file = path.join(STORE_CONFIG_AEG);
         let auth_file = path.join(STORE_AUTHORIZATION_KEY);
-        if !config_file.exists() || !auth_file.exists() {
+        if !config_file.exists() || !auth_file.exists() || !collection_lock.exists() {
+            println!("Missing file. Running initialize config.");
             Self::initialize_config(None, None);
+        } else {
+            // Attempt migration if collection.lock is not JSON (old format).
+            if let Err(e) = Self::maybe_migrate_collection_lock() {
+                // If migration fails, re-init to stable state.
+                eprintln!("Collection lock migration failed: {}. Reinitializing.", e);
+                Self::initialize_config(None, None);
+            }
         }
     }
 
+    /// Create or re-create configuration files. Returns config dir path.
     pub fn initialize_config(overwrite: Option<bool>, verbose_mode: Option<bool>) -> PathBuf {
         let overwrite_mode = overwrite.unwrap_or(false);
-        let verbose_mode = verbose_mode.unwrap_or(false);
+        let _verbose_mode = verbose_mode.unwrap_or(false);
         let dir = Self::get_config_path();
 
         if overwrite_mode && dir.exists() {
@@ -60,11 +82,147 @@ impl AegFileSystem {
             fs::create_dir_all(&dir).expect("Failed to create config directory");
         }
 
-        let auth_key = AegCrypto::create_authorization_key(Some(verbose_mode));
         let key_path = dir.join(STORE_AUTHORIZATION_KEY);
-        fs::write(&key_path, auth_key.as_bytes()).expect("Failed to write AUTHORIZATION_KEY");
+        let auth_key = if key_path.exists() {
+            fs::read_to_string(&key_path).expect("Failed to read AUTHORIZATION_KEY")
+        } else {
+            let k = AegCrypto::create_authorization_key(Some(_verbose_mode));
+            fs::write(&key_path, &k).expect("Failed to write AUTHORIZATION_KEY");
+            k
+        };
+
+        // Initialize default collection.lock (JSON format) if missing
+        let collection_path = dir.join(STORE_COLLECTION);
+        if !collection_path.exists() {
+            Self::write_collection_lock_default(&auth_key);
+        }
 
         dir
+    }
+
+    /// Write an arbitrary JSON string (plaintext JSON) encrypted into collection.lock
+    pub fn write_collection_lock_json(data: &str, auth_key: &str) {
+        let key_bytes = general_purpose::STANDARD
+            .decode(auth_key)
+            .expect("Invalid base64 auth key");
+        let key_arr: [u8; 32] = key_bytes
+            .as_slice()
+            .try_into()
+            .expect("Authorization key must be 32 bytes after base64 decoding");
+
+        let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&key_arr[..12]);
+
+        let encrypted = cipher
+            .encrypt(nonce, data.as_bytes())
+            .expect("Failed to encrypt collection lock");
+        let encoded = general_purpose::STANDARD.encode(&encrypted);
+
+        let path = Self::get_config_path().join(STORE_COLLECTION);
+
+        // write and flush immediately
+        let mut file = fs::File::create(&path).expect("Failed to open collection.lock for writing");
+        use std::io::Write;
+        file.write_all(encoded.as_bytes())
+            .expect("Failed to write collection.lock");
+        file.sync_all().expect("Failed to flush collection.lock");
+    }
+
+    /// Read collection.lock and return decrypted JSON string.
+    /// Returns empty string if file missing or empty.
+    pub fn read_collection_lock() -> String {
+        let path = Self::get_config_path().join(STORE_COLLECTION);
+        if !path.exists() {
+            return String::new();
+        }
+
+        let auth_key = Self::read_authorization_key();
+        let key_bytes = general_purpose::STANDARD
+            .decode(auth_key)
+            .expect("Invalid auth key");
+
+        let key_arr: [u8; 32] = key_bytes
+            .as_slice()
+            .try_into()
+            .expect("Authorization key must be 32 bytes after base64 decoding");
+        let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+
+        let nonce = Nonce::from_slice(&key_arr[..12]);
+
+        let encrypted = fs::read_to_string(&path).unwrap_or_default();
+        if encrypted.is_empty() {
+            return String::new();
+        }
+
+        let encrypted_bytes = general_purpose::STANDARD
+            .decode(encrypted)
+            .expect("Invalid base64 in collection.lock");
+        let decrypted = cipher
+            .decrypt(nonce, encrypted_bytes.as_ref())
+            .expect("Failed to decrypt collection.lock");
+        String::from_utf8(decrypted).expect("Collection lock decrypted to invalid UTF-8")
+    }
+
+    /// Read collection lock and parse into CollectionLock. This function will perform
+    /// migration if the file contains the old single-string format.
+    pub fn read_collection_lock_obj() -> CollectionLock {
+        // If file missing or empty, return default lock
+        let json_str = Self::read_collection_lock();
+        if json_str.trim().is_empty() {
+            return CollectionLock {
+                active: "default".to_string(),
+                collections: vec!["default".to_string()],
+            };
+        }
+
+        // Try to parse JSON object
+        match serde_json::from_str::<CollectionLock>(&json_str) {
+            Ok(lock) => lock,
+            Err(_) => {
+                // Attempt to treat json_str as an old plain string (unquoted or quoted)
+                let s = json_str.trim().trim_matches('"').to_string();
+                let lock = CollectionLock {
+                    active: s.clone(),
+                    collections: vec![s],
+                };
+                // migrate by overwriting collection.lock with the new JSON structure
+                let auth_key = Self::read_authorization_key();
+                let serialized =
+                    serde_json::to_string_pretty(&lock).expect("Failed to serialize migrated lock");
+                Self::write_collection_lock_json(&serialized, &auth_key);
+                lock
+            }
+        }
+    }
+
+    /// Helper used by validate_files to migrate if necessary.
+    fn maybe_migrate_collection_lock() -> Result<(), String> {
+        let path = Self::get_config_path().join(STORE_COLLECTION);
+        if !path.exists() {
+            return Ok(());
+        }
+
+        // Attempt to decrypt and parse; read_collection_lock_obj already migrates on failure,
+        // so just calling it is sufficient.
+        let _ = Self::read_collection_lock_obj();
+        Ok(())
+    }
+
+    pub fn write_collection_lock_default(auth_key: &str) {
+        let lock = CollectionLock {
+            active: "default".to_string(),
+            collections: vec!["default".to_string()],
+        };
+        let serialized =
+            serde_json::to_string_pretty(&lock).expect("Failed to serialize default lock");
+        Self::write_collection_lock_json(&serialized, auth_key);
+    }
+
+    pub fn read_authorization_key() -> String {
+        let path = Self::get_config_path().join(STORE_AUTHORIZATION_KEY);
+        fs::read_to_string(&path).expect("Failed to read authorization key")
     }
 }
 
@@ -91,42 +249,99 @@ impl AegCrypto {
 }
 
 // ===================== ENGINE CORE =====================
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AegCore {
     pub active_collection: String,
+    pub collections: Vec<String>,
 }
 
 impl AegCore {
-    pub fn config_path() -> PathBuf {
-        let mut path = AegFileSystem::get_config_path();
-        path.push(STORE_ENGINE_STATE);
-        path
-    }
-
     pub fn load() -> Self {
-        let path = Self::config_path();
-        if path.exists() {
-            let data = fs::read_to_string(&path).expect("Failed to read engine state file");
-            serde_json::from_str(&data).expect("Failed to parse engine state")
-        } else {
-            Self {
-                active_collection: "default".to_string(),
-            }
+        let lock = AegFileSystem::read_collection_lock_obj();
+        Self {
+            active_collection: lock.active,
+            collections: lock.collections,
         }
     }
 
     pub fn save(&self) {
-        let path = Self::config_path();
-        let data = serde_json::to_string_pretty(&self).expect("Failed to serialize engine state");
-        fs::write(&path, data).expect("Failed to write engine state file");
-    }
+        let lock = CollectionLock {
+            active: self.active_collection.clone(),
+            collections: self.collections.clone(),
+        };
+        let json =
+            serde_json::to_string_pretty(&lock).expect("Failed to serialize collection lock");
+        let auth_key = AegFileSystem::read_authorization_key();
 
-    pub fn set_active_collection(&mut self, name: &str) {
-        self.active_collection = name.to_string();
+        // Write JSON to disk first
+        let path = AegFileSystem::get_config_path().join(STORE_COLLECTION);
+        fs::write(&path, json.clone()).expect("Failed to write collection.lock");
+
+        // Then encrypt
+        AegFileSystem::write_collection_lock_json(&json, &auth_key);
     }
 
     pub fn get_active_collection(&self) -> &str {
         &self.active_collection
+    }
+
+    pub fn set_active_collection(&mut self, name: &str) -> Result<(), String> {
+        if !self.collections.contains(&name.to_string()) {
+            return Err(format!("Collection '{}' does not exist", name));
+        }
+        self.active_collection = name.to_string();
+        self.save();
+        Ok(())
+    }
+
+    pub fn create_collection(name: &str) -> String {
+        // Load fresh
+        let mut core = Self::load();
+        if core.collections.contains(&name.to_string()) {
+            return format!("✗ Collection '{}' already exists", name);
+        }
+
+        core.collections.push(name.to_string());
+        core.save(); // persist
+
+        // reload to ensure Use sees the new collection
+        let _ = Self::load();
+
+        format!("✓ Collection '{}' created", name)
+    }
+
+    pub fn delete_collection(name: &str) -> String {
+        let mut core = Self::load();
+        if core.collections.len() == 1 {
+            return "✗ Cannot delete the last collection".into();
+        }
+        if let Some(pos) = core.collections.iter().position(|x| x == name) {
+            core.collections.remove(pos);
+            if core.active_collection == name {
+                core.active_collection = core.collections[0].clone();
+            }
+            core.save();
+            format!("✓ Collection '{}' deleted", name)
+        } else {
+            format!("✗ Collection '{}' does not exist", name)
+        }
+    }
+
+    pub fn rename_collection(name: &str, new_name: &str) -> String {
+        let mut core = Self::load();
+        if core.collections.contains(&new_name.to_string()) {
+            return format!("✗ Collection '{}' already exists", new_name);
+        }
+        if let Some(pos) = core.collections.iter().position(|x| x == name) {
+            core.collections[pos] = new_name.to_string();
+            if core.active_collection == name {
+                core.active_collection = new_name.to_string();
+            }
+            core.save();
+            format!("✓ Collection '{}' renamed to '{}'", name, new_name)
+        } else {
+            format!("✗ Collection '{}' does not exist", name)
+        }
     }
 }
 

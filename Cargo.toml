@@ -25,3 +25,5 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "ansi"] }
 tracing-appender = "0.2"
 hostname = "0.4"
+rustyline = "17.0.2"
+easy-repl = "0.2.1"
