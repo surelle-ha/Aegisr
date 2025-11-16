@@ -11,6 +11,10 @@ name = "aegisr"
 path = "src/bin/terminal.rs"
 
 [[bin]]
+name = "aegisr-repl"
+path = "src/bin/repl.rs"
+
+[[bin]]
 name = "aegisr-daemon"
 path = "src/bin/daemon.rs"
 
