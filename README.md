@@ -100,3 +100,4 @@ This document tracks the evolution of Aegisr's performance across versions. Metr
 - Outliers in measurements are expected; record them in the notes column if significant.
 - Include environment details if testing conditions change (CPU, memory, OS version, etc.).
 - Consider adding visualizations in the future to track trends.
+- This document serves as a historical record of Aegisr's performance evolution.
