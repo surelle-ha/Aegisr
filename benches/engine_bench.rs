@@ -1,6 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use aegisr_engine::{AegCore, AegFileSystem, AegMemoryEngine, AegCore as EngineCore};
-
+use aegisr_engine::{AegFileSystem, AegCore as EngineCore};
 fn benchmark_put_get(c: &mut Criterion) {
     // Ensure clean environment
     AegFileSystem::reset_files();
@@ -8,7 +7,6 @@ fn benchmark_put_get(c: &mut Criterion) {
 
     let key = "test_key";
     let value = "test_value";
-
     c.bench_function("put_value", |b| {
         b.iter(|| {
             // repeatedly put the same key/value
@@ -16,9 +14,7 @@ fn benchmark_put_get(c: &mut Criterion) {
         })
     });
 
-    // Load once for get
     EngineCore::put_value(key, value);
-
     c.bench_function("get_value", |b| {
         b.iter(|| {
             let _ = EngineCore::get_value(key);
