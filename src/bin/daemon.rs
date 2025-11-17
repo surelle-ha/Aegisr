@@ -40,15 +40,10 @@ struct DaemonConfig {
 #[derive(Parser, Debug)]
 #[command(author, version, about = "AEGISR Daemon")]
 struct CliArgs {
-    /// Host to listen on
     #[arg(short = 'H', long)]
     host: Option<String>,
-
-    /// Port to listen on
     #[arg(short, long)]
     port: Option<u16>,
-
-    /// Config JSON file
     #[arg(short, long)]
     config: Option<String>,
 }
@@ -105,7 +100,6 @@ impl AegDaemon {
 
     pub async fn start(&self) {
         AegFileSystem::validate_files();
-
         init_tracing(&self.logger_cfg);
         self.print_banner();
         self.spawn_background_worker();
@@ -199,9 +193,7 @@ async fn handle_command(cmd: AegisrCommand) -> String {
     match cmd {
         AegisrCommand::New { verbose, name } => {
             let resp = AegCore::create_collection(&name);
-            if verbose {
-                info!("Verbose: {}", resp);
-            }
+            if verbose { info!("Verbose: {}", resp); }
             resp
         }
         AegisrCommand::List => {
@@ -218,20 +210,12 @@ async fn handle_command(cmd: AegisrCommand) -> String {
         }
         AegisrCommand::Delete { verbose, name } => {
             let resp = AegCore::delete_collection(&name);
-            if verbose {
-                info!("Verbose: {}", resp);
-            }
+            if verbose { info!("Verbose: {}", resp); }
             resp
         }
-        AegisrCommand::Rename {
-            verbose,
-            name,
-            new_name,
-        } => {
+        AegisrCommand::Rename { verbose, name, new_name } => {
             let resp = AegCore::rename_collection(&name, &new_name);
-            if verbose {
-                info!("Verbose: {}", resp);
-            }
+            if verbose { info!("Verbose: {}", resp); }
             resp
         }
         AegisrCommand::Use { verbose, name } => {
@@ -240,9 +224,7 @@ async fn handle_command(cmd: AegisrCommand) -> String {
 
             match engine.set_active_collection(&name) {
                 Ok(_) => {
-                    if verbose {
-                        info!("Verbose: switched to '{}'", name);
-                    }
+                    if verbose { info!("Verbose: switched to '{}'", name); }
                     format!("✓ Active Collection: {}", name)
                 }
                 Err(e) => {
@@ -251,46 +233,59 @@ async fn handle_command(cmd: AegisrCommand) -> String {
                 }
             }
         }
-
         AegisrCommand::Init { verbose, reset } => {
             if reset {
                 warn!("Reset requested — clearing engine files");
                 AegFileSystem::reset_files();
             }
-
             info!("Initializing engine files");
             let config_path = AegFileSystem::initialize_config(Some(reset), Some(verbose));
-
-            // Always reload fresh after initialization
             let mut engine = AegCore::load();
 
-            // Ensure at least the default collection exists
             if engine.collections.is_empty() {
                 engine.collections.push("default".to_string());
             }
             if engine.active_collection.is_empty() {
                 engine.active_collection = engine.collections[0].clone();
             }
-
-            // Save back to collection.lock
             engine.save();
 
-            if verbose {
-                info!("Verbose: init completed at {}", config_path.display());
-            }
+            if verbose { info!("Verbose: init completed at {}", config_path.display()); }
 
-            format!(
-                "✓ Engine initialized. Active Collection: {}",
-                engine.get_active_collection()
-            )
+            format!("✓ Engine initialized. Active Collection: {}", engine.get_active_collection())
         }
         AegisrCommand::Status => {
             let engine = AegCore::load();
-            if engine.active_collection.is_empty() {
-                "null".to_string()
-            } else {
-                engine.active_collection.clone()
+            if engine.active_collection.is_empty() { "null".to_string() } else { engine.active_collection.clone() }
+        }
+
+        // --- NEW COMMANDS ---
+        AegisrCommand::Put { verbose, key, value } => {
+            let resp = AegCore::put_value(&key, &value);
+            if verbose { info!("Verbose: PUT {} = {}", key, value); }
+            resp
+        }
+        AegisrCommand::Get { verbose, key } => {
+            match AegCore::get_value(&key) {
+                Some(v) => {
+                    if verbose { info!("Verbose: GET {} = {}", key, v); }
+                    v
+                },
+                None => {
+                    if verbose { warn!("Verbose: GET {} not found", key); }
+                    "Key not found".to_string()
+                }
             }
+        }
+        AegisrCommand::Del { verbose, key } => {
+            let resp = AegCore::delete_value(&key);
+            if verbose { info!("Verbose: DEL {}", key); }
+            resp
+        }
+        AegisrCommand::Clear { verbose } => {
+            let resp = AegCore::clear_values();
+            if verbose { info!("Verbose: CLEAR all values"); }
+            resp
         }
     }
 }
@@ -299,25 +294,16 @@ async fn handle_command(cmd: AegisrCommand) -> String {
 async fn main() {
     let args = CliArgs::parse();
 
-    // Load config file if provided
     let file_config = if let Some(cfg_path) = &args.config {
         let cfg_str = fs::read_to_string(cfg_path)
             .unwrap_or_else(|_| panic!("Failed to read config file: {}", cfg_path));
-        serde_json::from_str::<DaemonConfig>(&cfg_str).unwrap_or(DaemonConfig {
-            host: None,
-            port: None,
-        })
+        serde_json::from_str::<DaemonConfig>(&cfg_str).unwrap_or(DaemonConfig { host: None, port: None })
     } else {
-        DaemonConfig {
-            host: None,
-            port: None,
-        }
+        DaemonConfig { host: None, port: None }
     };
 
-    // Determine host and port: CLI > config file > default
     let host = args.host.or(file_config.host).unwrap_or("127.0.0.1".into());
     let port = args.port.or(file_config.port).unwrap_or(1211);
-
     let address = format!("{}:{}", host, port);
 
     let logger_cfg = LoggerConfig {

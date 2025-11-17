@@ -75,3 +75,28 @@ Create a JSON file to specify the host and port:
 > (1) Command-line options (-H for host, -p for port) override settings in the configuration file.
 > (2) If neither command-line options nor a config file are provided, the daemon defaults to listening on 127.0.0.1:1211.
 > (3) Ensure the specified host and port are available and not blocked by a firewall.
+
+# Historical Performance Benchmarks
+
+This document tracks the evolution of Aegisr's performance across versions. Metrics are collected using standard benchmarking tests for `put_value` and `get_value` operations.
+
+## Benchmark Table
+
+| **Version** | **Date** | **Put Ops/sec** | **Get Ops/sec** | **Put Latency (µs)** | **Get Latency (µs)** | **Notes** |
+|-------------|----------|----------------|----------------|---------------------|---------------------|-----------|
+| 1.0.1-beta  | 2025-11-17 | 7,000          | 100,000        | 136–145             | 9–10                | Initial benchmark with 100 measurements. Found some outliers (7% put, 8% get). |
+| 1.0.2-beta  | TBD      | TBD            | TBD            | TBD                 | TBD                 | TBD       |
+
+## How to Update
+
+1. Run benchmarks using the standard `put_value` and `get_value` tests.
+2. Record average ops/sec for both operations.
+3. Record latency range and any significant outliers.
+4. Update the table with the new version, date, and notes on changes or optimizations.
+5. Keep the table chronological for easy comparison of improvements over time.
+
+## Notes
+
+- Outliers in measurements are expected; record them in the notes column if significant.
+- Include environment details if testing conditions change (CPU, memory, OS version, etc.).
+- Consider adding visualizations in the future to track trends.
