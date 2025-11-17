@@ -1,123 +1,130 @@
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
-// ================
-// INIT COMMAND
-// ================
+// INIT
 #[derive(Args, Debug)]
-#[command(about = "Initialize the Aegisr engine")]
 pub struct InitArgs {
     #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
-
-    #[arg(short, long, help = "Reset existing data before initialization")]
+    #[arg(short, long, help = "Reset configuration files")]
     pub reset: bool,
 }
 
-// ================
-// USE COMMAND
-// ================
+// USE
 #[derive(Args, Debug)]
-#[command(about = "Switch the active collection")]
 pub struct UseArgs {
     #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
-
-    #[arg(help = "Name of the collection to use")]
+    #[arg(help = "Name of the collection to activate")]
     pub name: String,
 }
 
-// ================
-// NEW COMMAND
-// ================
+// NEW
 #[derive(Args, Debug)]
-#[command(about = "Create a new collection")]
 pub struct NewArgs {
     #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
-
-    #[arg(help = "Name of the new collection")]
+    #[arg(help = "Name of the new collection to create")]
     pub name: String,
 }
 
-// ================
-// DELETE COMMAND
-// ================
+// DELETE
 #[derive(Args, Debug)]
-#[command(about = "Delete an existing collection")]
 pub struct DeleteArgs {
     #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
-
     #[arg(help = "Name of the collection to delete")]
     pub name: String,
 }
 
-// ================
-// RENAME COMMAND
-// ================
+// RENAME
 #[derive(Args, Debug)]
-#[command(about = "Rename a collection")]
 pub struct RenameArgs {
     #[arg(short, long, help = "Enable verbose output")]
     pub verbose: bool,
-
-    #[arg(help = "Current name of the collection")]
+    #[arg(help = "Name of the collection to rename")]
     pub name: String,
-
     #[arg(help = "New name for the collection")]
     pub new_name: String,
 }
 
-// ========================================================
+#[derive(Args, Debug)]
+pub struct PutArgs {
+    #[arg(short, long, help = "Enable verbose output")]
+    pub verbose: bool,
+    #[arg(help = "Key to store in the active collection")]
+    pub key: String,
+    #[arg(help = "Value to associate with the key")]
+    pub value: String,
+}
+
+#[derive(Args, Debug)]
+pub struct GetArgs {
+    #[arg(short, long, help = "Enable verbose output")]
+    pub verbose: bool,
+    #[arg(help = "Key to retrieve from the active collection")]
+    pub key: String,
+}
+
+#[derive(Args, Debug)]
+pub struct DelArgs {
+    #[arg(short, long, help = "Enable verbose output")]
+    pub verbose: bool,
+    #[arg(help = "Key to delete from the active collection")]
+    pub key: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ClearArgs {
+    #[arg(short, long, help = "Enable verbose output")]
+    pub verbose: bool,
+}
+
+// ===========================
+// SUBCOMMAND ENUM
+// ===========================
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    #[command(about = "Initialize the Aegisr engine")]
+    #[command(about = "Initialize the configuration")]
     Init(InitArgs),
-
     #[command(about = "List all collections")]
     List,
-
-    #[command(about = "Switch the active collection")]
+    #[command(about = "Switch to a different collection")]
     Use(UseArgs),
-
     #[command(about = "Create a new collection")]
     New(NewArgs),
-
     #[command(about = "Delete an existing collection")]
     Delete(DeleteArgs),
-
-    #[command(about = "Rename a collection")]
+    #[command(about = "Rename an existing collection")]
     Rename(RenameArgs),
-
-    #[command(about = "Show the currently active collection")]
+    #[command(about = "Show the current status")]
     Status,
+    #[command(about = "Store a key/value pair in the active collection")]
+    Put(PutArgs),
+    #[command(about = "Retrieve the value of a key from the active collection")]
+    Get(GetArgs),
+    #[command(about = "Delete a key/value pair from the active collection")]
+    Del(DelArgs),
+    #[command(about = "Clear all key/value pairs from the active collection")]
+    Clear(ClearArgs),
 }
+
+// ===========================
+// AegisrCommand ENUM
+// ===========================
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum AegisrCommand {
-    Init {
-        verbose: bool,
-        reset: bool,
-    },
+    Init { verbose: bool, reset: bool },
     List,
-    Use {
-        verbose: bool,
-        name: String,
-    },
-    New {
-        verbose: bool,
-        name: String,
-    },
-    Delete {
-        verbose: bool,
-        name: String,
-    },
-    Rename {
-        verbose: bool,
-        name: String,
-        new_name: String,
-    },
+    Use { verbose: bool, name: String },
+    New { verbose: bool, name: String },
+    Delete { verbose: bool, name: String },
+    Rename { verbose: bool, name: String, new_name: String },
     Status,
+    Put { verbose: bool, key: String, value: String },
+    Get { verbose: bool, key: String },
+    Del { verbose: bool, key: String },
+    Clear { verbose: bool },
 }

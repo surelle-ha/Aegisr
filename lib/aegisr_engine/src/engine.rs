@@ -18,7 +18,6 @@ pub const ENGINE_VERSION: &str = "1.0.1-beta";
 pub const STORE_DIR: &str = ".aegisr";
 pub const STORE_COLLECTION: &str = "collection.lock";
 pub const STORE_CONFIG_AEG: &str = "config.aeg";
-pub const STORE_ENGINE_STATE: &str = "engine_state.json";
 pub const STORE_AUTHORIZATION_KEY: &str = "AUTHORIZATION_KEY";
 
 // ===================== FILESYSTEM =====================
@@ -343,6 +342,35 @@ impl AegCore {
             format!("✗ Collection '{}' does not exist", name)
         }
     }
+
+    pub fn put_value(key: &str, value: &str) -> String {
+        let mut engine = AegMemoryEngine::load();
+        engine.insert(key, value);
+        engine.save();
+        format!("✓ Key '{}' saved in collection '{}'", key, engine.collection_name)
+    }
+
+    pub fn get_value(key: &str) -> Option<String> {
+        let engine = AegMemoryEngine::load();
+        engine.get(key)
+    }
+
+    pub fn delete_value(key: &str) -> String {
+        let mut engine = AegMemoryEngine::load();
+        if engine.get(key).is_some() {
+            engine.delete(key);
+            engine.save();
+            format!("✓ Key '{}' deleted from collection '{}'", key, engine.collection_name)
+        } else {
+            format!("✗ Key '{}' not found in collection '{}'", key, engine.collection_name)
+        }
+    }
+
+    pub fn clear_values() -> String {
+        let mut engine = AegMemoryEngine::load();
+        engine.clear();
+        format!("✓ All keys cleared from collection '{}'", engine.collection_name)
+    }
 }
 
 // ===================== PERSISTENT CACHE =====================
@@ -420,3 +448,120 @@ impl AegCache {
         }
     }
 }
+
+// ===================== IN-MEMORY ENGINE =====================
+// Simple in-memory key/value engine with JSON persistence to STORE_ENGINE_STATE.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AegMemoryEngine {
+    pub store: HashMap<String, String>,
+    pub collection_name: String,
+}
+
+impl AegMemoryEngine {
+    /// Create a new empty engine for a specific collection
+    pub fn new(collection_name: &str) -> Self {
+        Self {
+            store: HashMap::new(),
+            collection_name: collection_name.to_string(),
+        }
+    }
+
+    /// Path to engine_state file, including collection name
+    fn engine_file_path(collection_name: &str) -> PathBuf {
+        let mut path = AegFileSystem::get_config_path();
+        path.push(format!("collection_{}.aekv", collection_name));
+        path
+    }
+
+    /// Insert or update a key
+    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.store.insert(key.into(), value.into());
+    }
+
+    /// Get value by key (cloned)
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.store.get(key).cloned()
+    }
+
+    /// Delete a key
+    pub fn delete(&mut self, key: &str) {
+        self.store.remove(key);
+    }
+
+    /// List all key/value pairs
+    pub fn list(&self) -> Vec<(String, String)> {
+        self.store.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
+    /// Save current engine state to disk (JSON) encrypted
+    pub fn save(&self) {
+        let path = Self::engine_file_path(&self.collection_name);
+        let json = serde_json::to_string_pretty(&self).expect("Failed to serialize engine state");
+
+        // Encrypt with authorization key
+        let auth_key = AegFileSystem::read_authorization_key();
+        let key_bytes = general_purpose::STANDARD
+            .decode(auth_key)
+            .expect("Invalid base64 auth key");
+        let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&key_bytes[..12]);
+
+        let encrypted = cipher.encrypt(nonce, json.as_bytes())
+            .expect("Failed to encrypt engine state");
+        let encoded = general_purpose::STANDARD.encode(&encrypted);
+
+        fs::write(&path, encoded).expect("Failed to write engine state file");
+    }
+
+    /// Load engine state from disk. If missing or invalid, returns new engine.
+    pub fn load() -> Self {
+        let core = AegCore::load();
+        let collection_name = core.active_collection.clone();
+        let path = Self::engine_file_path(&collection_name);
+
+        if path.exists() {
+            let encrypted = fs::read_to_string(&path).unwrap_or_default();
+            if encrypted.trim().is_empty() {
+                return Self::new(&collection_name);
+            }
+
+            let auth_key = AegFileSystem::read_authorization_key();
+            let key_bytes = general_purpose::STANDARD
+                .decode(auth_key)
+                .expect("Invalid base64 auth key");
+            let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+            let cipher = Aes256Gcm::new(key);
+            let nonce = Nonce::from_slice(&key_bytes[..12]);
+
+            if let Ok(encrypted_bytes) = general_purpose::STANDARD.decode(encrypted) {
+                if let Ok(decrypted) = cipher.decrypt(nonce, encrypted_bytes.as_ref()) {
+                    if let Ok(engine) = serde_json::from_slice::<AegMemoryEngine>(&decrypted) {
+                        return engine;
+                    }
+                }
+            }
+        }
+
+        Self::new(&collection_name)
+    }
+
+    /// Clear the engine and persist an empty state
+    pub fn clear(&mut self) {
+        self.store.clear();
+        self.save();
+    }
+}
+
+// Small convenience wrapper for common operations used by the daemon. This keeps
+// API calls short and mirrors the pattern used in earlier Aeg* structs.
+impl Default for AegMemoryEngine {
+    fn default() -> Self {
+        Self::load()
+    }
+}
+
+// Example helpers that tie collections to engine filenames could be added here.
+// For example, if you want per-collection engine files, you could change
+// engine_file_path to include the active collection name from AegCore.
+
