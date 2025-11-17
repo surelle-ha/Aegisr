@@ -1,7 +1,8 @@
 use aegisr_engine::{AegCore, AegFileSystem, AegisrCommand};
 use clap::Parser;
 use hostname::get as get_hostname;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::fs;
 use std::net::SocketAddr;
 use std::process;
@@ -46,6 +47,14 @@ struct CliArgs {
     port: Option<u16>,
     #[arg(short, long)]
     config: Option<String>,
+}
+
+/// Standard JSON response
+#[derive(Serialize)]
+struct JsonResponse<T: Serialize> {
+    status: String,
+    message: String,
+    data: Option<T>,
 }
 
 /// Initialize tracing subscriber
@@ -119,43 +128,37 @@ impl AegDaemon {
 
         loop {
             tokio::select! {
-                Ok((mut socket, addr)) = listener.accept() => {
-                    info!(%addr, "Client connected");
+                                    Ok((mut socket, addr)) = listener.accept() => {
+                                        info!(%addr, "Client connected");
 
-                    tokio::spawn(async move {
-                        let mut buffer = vec![0u8; 4096];
+                                        tokio::spawn(async move {
+                                            let mut buffer = vec![0u8; 4096];
 
-                        match socket.read(&mut buffer).await {
-                            Ok(n) if n > 0 => {
-                                let data = &buffer[..n];
-
-                                match serde_json::from_slice::<AegisrCommand>(data) {
-                                    Ok(cmd) => {
-                                        info!(?cmd, "Command received");
-
-                                        let response = handle_command(cmd).await;
-
-                                        if let Err(e) = socket.write_all(response.as_bytes()).await {
-                                            error!(%e, "Failed sending response");
-                                        }
+                                            match socket.read(&mut buffer).await {
+                                                Ok(n) if n > 0 => {
+                                                    let data = &buffer[..n];
+                                                    let response_json = match serde_json::from_slice::<AegisrCommand>(data) {
+                                                    Ok(cmd) => handle_command(cmd).await.to_json(),
+                                                        Err(_) => serde_json::to_string(&json!({
+                                                            "status": "error",
+                                                            "message": "Invalid command"
+                                                        })).unwrap(),
+                                                    };
+                                                    if let Err(e) = socket.write_all(response_json.as_bytes()).await {
+                                                        error!(%e, "Failed sending response");
+                                                    }
+                                                }
+                                                Ok(_) => debug!("Connection closed without data"),
+                                                Err(e) => error!(%e, "Socket read error"),
+                                            }
+                                        });
                                     }
-                                    Err(e) => {
-                                        warn!(%e, "Invalid JSON command");
-                                        let _ = socket.write_all(b"ERR: invalid command\n").await;
+
+                                    _ = signal::ctrl_c() => {
+                                        info!("Ctrl+C detected — shutting down daemon");
+                                        break;
                                     }
                                 }
-                            }
-                            Ok(_) => debug!("Connection closed without data"),
-                            Err(e) => error!(%e, "Socket read error"),
-                        }
-                    });
-                }
-
-                _ = signal::ctrl_c() => {
-                    info!("Ctrl+C detected — shutting down daemon");
-                    break;
-                }
-            }
         }
 
         info!("Daemon shutdown complete");
@@ -173,63 +176,80 @@ impl AegDaemon {
     }
 
     fn print_banner(&self) {
-        let reset = "\x1b[0m";
-        let green = "\x1b[32m";
-        let cyan = "\x1b[36m";
-        let yellow = "\x1b[33m";
-
-        println!("{}======================================{}", green, reset);
-        println!("{}            AEGISR DAEMON             {}", cyan, reset);
-        println!("{}--------------------------------------{}", yellow, reset);
+        println!("==== AEGISR DAEMON ====");
         println!(
-            "{}Daemon Info{} \n \t host: {} \n \t pid: {} \n \t listen: {}",
-            green, reset, self.hostname, self.pid, self.address
+            "Host: {} | PID: {} | Listening: {}",
+            self.hostname, self.pid, self.address
         );
-        println!("{}======================================{}", green, reset);
+        println!("=======================");
     }
 }
 
-async fn handle_command(cmd: AegisrCommand) -> String {
+enum CommandResult {
+    Text { message: String, success: bool },
+    List { items: Vec<String>, success: bool },
+}
+
+impl CommandResult {
+    fn to_json(&self) -> String {
+        match self {
+            CommandResult::Text { message, success } => {
+                serde_json::to_string(&json!({
+                    "status": if *success { "ok" } else { "error" },
+                    "message": message
+                })).unwrap()
+            }
+            CommandResult::List { items, success } => {
+                serde_json::to_string(&json!({
+                    "status": if *success { "ok" } else { "error" },
+                    "data": items
+                })).unwrap()
+            }
+        }
+    }
+}
+
+async fn handle_command(cmd: AegisrCommand) -> CommandResult {
     match cmd {
         AegisrCommand::New { verbose, name } => {
             let resp = AegCore::create_collection(&name);
             if verbose { info!("Verbose: {}", resp); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
         AegisrCommand::List => {
             let engine: AegCore = AegCore::load();
             if engine.collections.is_empty() {
-                "No collections found".to_string()
+                CommandResult::Text { message: "No collections found".into(), success: true }
             } else {
-                let mut output = String::from("✓ Collections:\n");
-                for collection in engine.collections {
-                    output.push_str(&format!("• {}\n", collection));
-                }
-                output
+                CommandResult::List { items: engine.collections.clone(), success: true }
             }
         }
         AegisrCommand::Delete { verbose, name } => {
             let resp = AegCore::delete_collection(&name);
             if verbose { info!("Verbose: {}", resp); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
         AegisrCommand::Rename { verbose, name, new_name } => {
             let resp = AegCore::rename_collection(&name, &new_name);
             if verbose { info!("Verbose: {}", resp); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
         AegisrCommand::Use { verbose, name } => {
             let mut engine = AegCore::load();
-            debug!("Collections loaded from disk: {:?}", engine.collections);
-
             match engine.set_active_collection(&name) {
                 Ok(_) => {
                     if verbose { info!("Verbose: switched to '{}'", name); }
-                    format!("✓ Active Collection: {}", name)
+                    CommandResult::Text {
+                        message: format!("Active Collection set to '{}'", name),
+                        success: true,
+                    }
                 }
                 Err(e) => {
                     error!("Failed to switch to '{}': {}", name, e);
-                    format!("✗ Failed to switch to '{}': {}", name, e)
+                    CommandResult::Text {
+                        message: format!("Failed to switch to '{}': {}", name, e),
+                        success: false,
+                    }
                 }
             }
         }
@@ -238,10 +258,8 @@ async fn handle_command(cmd: AegisrCommand) -> String {
                 warn!("Reset requested — clearing engine files");
                 AegFileSystem::reset_files();
             }
-            info!("Initializing engine files");
             let config_path = AegFileSystem::initialize_config(Some(reset), Some(verbose));
             let mut engine = AegCore::load();
-
             if engine.collections.is_empty() {
                 engine.collections.push("default".to_string());
             }
@@ -249,43 +267,45 @@ async fn handle_command(cmd: AegisrCommand) -> String {
                 engine.active_collection = engine.collections[0].clone();
             }
             engine.save();
-
             if verbose { info!("Verbose: init completed at {}", config_path.display()); }
-
-            format!("✓ Engine initialized. Active Collection: {}", engine.get_active_collection())
+            CommandResult::Text {
+                message: format!("Engine initialized. Active Collection: {}", engine.get_active_collection()),
+                success: true,
+            }
         }
         AegisrCommand::Status => {
             let engine = AegCore::load();
-            if engine.active_collection.is_empty() { "null".to_string() } else { engine.active_collection.clone() }
+            CommandResult::Text {
+                message: engine.get_active_collection().to_string(),
+                success: true,
+            }
         }
-
-        // --- NEW COMMANDS ---
         AegisrCommand::Put { verbose, key, value } => {
             let resp = AegCore::put_value(&key, &value);
             if verbose { info!("Verbose: PUT {} = {}", key, value); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
         AegisrCommand::Get { verbose, key } => {
             match AegCore::get_value(&key) {
                 Some(v) => {
                     if verbose { info!("Verbose: GET {} = {}", key, v); }
-                    v
-                },
+                    CommandResult::Text { message: v, success: true }
+                }
                 None => {
                     if verbose { warn!("Verbose: GET {} not found", key); }
-                    "Key not found".to_string()
+                    CommandResult::Text { message: "Key not found".into(), success: false }
                 }
             }
         }
         AegisrCommand::Del { verbose, key } => {
             let resp = AegCore::delete_value(&key);
             if verbose { info!("Verbose: DEL {}", key); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
         AegisrCommand::Clear { verbose } => {
             let resp = AegCore::clear_values();
             if verbose { info!("Verbose: CLEAR all values"); }
-            resp
+            CommandResult::Text { message: resp, success: true }
         }
     }
 }
@@ -293,13 +313,17 @@ async fn handle_command(cmd: AegisrCommand) -> String {
 #[tokio::main]
 async fn main() {
     let args = CliArgs::parse();
-
     let file_config = if let Some(cfg_path) = &args.config {
-        let cfg_str = fs::read_to_string(cfg_path)
-            .unwrap_or_else(|_| panic!("Failed to read config file: {}", cfg_path));
-        serde_json::from_str::<DaemonConfig>(&cfg_str).unwrap_or(DaemonConfig { host: None, port: None })
+        let cfg_str = fs::read_to_string(cfg_path).unwrap_or_default();
+        serde_json::from_str::<DaemonConfig>(&cfg_str).unwrap_or(DaemonConfig {
+            host: None,
+            port: None,
+        })
     } else {
-        DaemonConfig { host: None, port: None }
+        DaemonConfig {
+            host: None,
+            port: None,
+        }
     };
 
     let host = args.host.or(file_config.host).unwrap_or("127.0.0.1".into());
@@ -310,8 +334,6 @@ async fn main() {
         log_to_file: true,
         level: std::env::var("AEGISR_LOG_LEVEL").unwrap_or("info".into()),
     };
-
-    AegFileSystem::validate_files();
 
     let daemon = AegDaemon::new(&address, logger_cfg);
     daemon.start().await;
