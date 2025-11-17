@@ -1,19 +1,105 @@
+# ==========================
+# DEV PREPARE
+# ==========================
 [tasks.dev-prepare-linux]
 description = "Prepare development environment for Linux"
 script = [
     "sudo apt update && sudo apt upgrade -y",
-    "sudo apt install -y build-essential pkg-config libssl-dev curl git"
+    "sudo apt install -y build-essential pkg-config libssl-dev curl git",
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+    "source $HOME/.cargo/env"
 ]
 
-[tasks.clean]
-description = "Clean the target directory"
-command = "cargo"
-args = ["clean"]
+[tasks.dev-prepare-docker]
+description = "Prepare Docker environment"
+script = [
+    "sudo apt update && sudo apt install -y docker.io docker-compose",
+    "sudo systemctl enable docker",
+    "sudo systemctl start docker",
+    "sudo usermod -aG docker $USER"
+]
 
+# ==========================
+# BUILD TASKS
+# ==========================
 [tasks.build]
-command = "cargo"
-args = ["build"]
+description = "Clean and build debug version"
+script = [
+    "cargo clean",
+    "cargo build",
+]
 
-[tasks.build-release]
-command = "cargo"
-args = ["build", "--release"]
+[tasks.bin-build]
+description = "Clean and build release version"
+script = [
+    "cargo clean",
+    "cargo build --release",
+]
+
+# ==========================
+# TESTING
+# ==========================
+[tasks.test]
+description = "Run unit and integration tests"
+script = [
+    "cargo test"
+]
+
+[tasks.test-watch]
+description = "Watch tests (requires cargo-watch)"
+script = [
+    "cargo watch -x test"
+]
+
+# ==========================
+# LINT & FORMAT
+# ==========================
+[tasks.format]
+description = "Format all Rust code using rustfmt"
+script = [
+    "cargo fmt"
+]
+
+[tasks.lint]
+description = "Lint Rust code with clippy"
+script = [
+    "cargo clippy --all-targets --all-features -- -D warnings"
+]
+
+# ==========================
+# DOCKER TASKS
+# ==========================
+[tasks.docker-build]
+description = "Build Docker image for daemon"
+script = [
+    "sudo docker build -t aegisr-daemon ."
+]
+
+[tasks.docker-run]
+description = "Run Docker container locally"
+script = [
+    "sudo docker run --rm -p 1211:1211 aegisr-daemon"
+]
+
+[tasks.docker-clean]
+description = "Remove local Docker image"
+script = [
+    "sudo docker rmi aegisr-daemon || true"
+]
+
+# ==========================
+# COMBINED TASKS
+# ==========================
+[tasks.dev-build]
+description = "Prepare environment and build daemon"
+dependencies = [
+    "dev-prepare-linux",
+    "build"
+]
+
+[tasks.release-build]
+description = "Build release binary and Docker image"
+dependencies = [
+    "bin-build",
+    "docker-build"
+]
