@@ -7,7 +7,6 @@ fn benchmark_put_get(c: &mut Criterion) {
 
     let key = "test_key";
     let value = "test_value";
-
     c.bench_function("put_value", |b| {
         b.iter(|| {
             // repeatedly put the same key/value
@@ -16,7 +15,6 @@ fn benchmark_put_get(c: &mut Criterion) {
     });
 
     EngineCore::put_value(key, value);
-
     c.bench_function("get_value", |b| {
         b.iter(|| {
             let _ = EngineCore::get_value(key);
