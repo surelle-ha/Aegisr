@@ -8,13 +8,17 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use zeroize::Zeroize;
+use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::thread::sleep;
 
 pub const RUNTIME_NAME: &str = "Aegisr";
 pub const ENGINE_NAME: &str = "Aegisr Engine (Dusk)";
 pub const ENGINE_DEVELOPER: &[&str] = &["surelle-ha"];
-pub const ENGINE_VERSION: &str = "1.0.1-beta";
+pub const ENGINE_VERSION: &str = "1.0.2-beta";
 pub const STORE_DIR: &str = ".aegisr";
 pub const STORE_COLLECTION: &str = "collection.lock";
 pub const STORE_CONFIG_AEG: &str = "config.aeg";
@@ -39,7 +43,6 @@ impl AegFileSystem {
         config_path
     }
 
-    /// Remove the whole config directory and recreate it (keeps it empty).
     pub fn reset_files() {
         let path = Self::get_config_path();
         if path.exists() {
@@ -48,7 +51,6 @@ impl AegFileSystem {
         fs::create_dir_all(&path).expect("Failed to recreate config directory");
     }
 
-    /// Ensure required files exist; if not, initialize them.
     pub fn validate_files() {
         let path = Self::get_config_path();
         let collection_lock: PathBuf = path.join(STORE_COLLECTION);
@@ -58,16 +60,13 @@ impl AegFileSystem {
             println!("Missing file. Running initialize config.");
             Self::initialize_config(None, None);
         } else {
-            // Attempt migration if collection.lock is not JSON (old format).
             if let Err(e) = Self::maybe_migrate_collection_lock() {
-                // If migration fails, re-init to stable state.
-                eprintln!("Collection lock migration failed: {}. Reinitializing.", e);
+                eprintln!("Migration failed: {}. Reinitializing.", e);
                 Self::initialize_config(None, None);
             }
         }
     }
 
-    /// Create or re-create configuration files. Returns config dir path.
     pub fn initialize_config(overwrite: Option<bool>, verbose_mode: Option<bool>) -> PathBuf {
         let overwrite_mode = overwrite.unwrap_or(false);
         let _verbose_mode = verbose_mode.unwrap_or(false);
@@ -90,7 +89,6 @@ impl AegFileSystem {
             k
         };
 
-        // Initialize default collection.lock (JSON format) if missing
         let collection_path = dir.join(STORE_COLLECTION);
         if !collection_path.exists() {
             Self::write_collection_lock_default(&auth_key);
@@ -99,37 +97,24 @@ impl AegFileSystem {
         dir
     }
 
-    /// Write an arbitrary JSON string (plaintext JSON) encrypted into collection.lock
     pub fn write_collection_lock_json(data: &str, auth_key: &str) {
-        let key_bytes = general_purpose::STANDARD
-            .decode(auth_key)
-            .expect("Invalid base64 auth key");
-        let key_arr: [u8; 32] = key_bytes
-            .as_slice()
-            .try_into()
-            .expect("Authorization key must be 32 bytes after base64 decoding");
-
+        let key_bytes = general_purpose::STANDARD.decode(auth_key).expect("Invalid base64");
+        let key_arr: [u8; 32] =
+            key_bytes.as_slice().try_into().expect("Auth key must be 32 bytes");
         let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(&key_arr[..12]);
 
-        let encrypted = cipher
-            .encrypt(nonce, data.as_bytes())
-            .expect("Failed to encrypt collection lock");
+        let encrypted = cipher.encrypt(nonce, data.as_bytes()).expect("Encrypt failed");
         let encoded = general_purpose::STANDARD.encode(&encrypted);
 
         let path = Self::get_config_path().join(STORE_COLLECTION);
-
-        // write and flush immediately
-        let mut file = fs::File::create(&path).expect("Failed to open collection.lock for writing");
+        let mut file = fs::File::create(&path).expect("Failed to open file");
         use std::io::Write;
-        file.write_all(encoded.as_bytes())
-            .expect("Failed to write collection.lock");
-        file.sync_all().expect("Failed to flush collection.lock");
+        file.write_all(encoded.as_bytes()).expect("Write failed");
+        file.sync_all().expect("Flush failed");
     }
 
-    /// Read collection.lock and return decrypted JSON string.
-    /// Returns empty string if file missing or empty.
     pub fn read_collection_lock() -> String {
         let path = Self::get_config_path().join(STORE_COLLECTION);
         if !path.exists() {
@@ -137,17 +122,12 @@ impl AegFileSystem {
         }
 
         let auth_key = Self::read_authorization_key();
-        let key_bytes = general_purpose::STANDARD
-            .decode(auth_key)
-            .expect("Invalid auth key");
+        let key_bytes = general_purpose::STANDARD.decode(auth_key).expect("Invalid auth key");
 
-        let key_arr: [u8; 32] = key_bytes
-            .as_slice()
-            .try_into()
-            .expect("Authorization key must be 32 bytes after base64 decoding");
+        let key_arr: [u8; 32] =
+            key_bytes.as_slice().try_into().expect("Auth key must be 32 bytes");
         let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
-
         let nonce = Nonce::from_slice(&key_arr[..12]);
 
         let encrypted = fs::read_to_string(&path).unwrap_or_default();
@@ -155,19 +135,17 @@ impl AegFileSystem {
             return String::new();
         }
 
-        let encrypted_bytes = general_purpose::STANDARD
-            .decode(encrypted)
-            .expect("Invalid base64 in collection.lock");
+        let encrypted_bytes =
+            general_purpose::STANDARD.decode(encrypted).expect("Invalid base64 content");
+
         let decrypted = cipher
             .decrypt(nonce, encrypted_bytes.as_ref())
-            .expect("Failed to decrypt collection.lock");
-        String::from_utf8(decrypted).expect("Collection lock decrypted to invalid UTF-8")
+            .expect("Decrypt failed");
+
+        String::from_utf8(decrypted).expect("Invalid UTF-8")
     }
 
-    /// Read collection lock and parse into CollectionLock. This function will perform
-    /// migration if the file contains the old single-string format.
     pub fn read_collection_lock_obj() -> CollectionLock {
-        // If file missing or empty, return default lock
         let json_str = Self::read_collection_lock();
         if json_str.trim().is_empty() {
             return CollectionLock {
@@ -176,35 +154,25 @@ impl AegFileSystem {
             };
         }
 
-        // Try to parse JSON object
         match serde_json::from_str::<CollectionLock>(&json_str) {
             Ok(lock) => lock,
             Err(_) => {
-                // Attempt to treat json_str as an old plain string (unquoted or quoted)
                 let s = json_str.trim().trim_matches('"').to_string();
                 let lock = CollectionLock {
                     active: s.clone(),
                     collections: vec![s],
                 };
-                // migrate by overwriting collection.lock with the new JSON structure
+
                 let auth_key = Self::read_authorization_key();
                 let serialized =
-                    serde_json::to_string_pretty(&lock).expect("Failed to serialize migrated lock");
+                    serde_json::to_string_pretty(&lock).expect("Serialize failed");
                 Self::write_collection_lock_json(&serialized, &auth_key);
                 lock
             }
         }
     }
 
-    /// Helper used by validate_files to migrate if necessary.
     fn maybe_migrate_collection_lock() -> Result<(), String> {
-        let path = Self::get_config_path().join(STORE_COLLECTION);
-        if !path.exists() {
-            return Ok(());
-        }
-
-        // Attempt to decrypt and parse; read_collection_lock_obj already migrates on failure,
-        // so just calling it is sufficient.
         let _ = Self::read_collection_lock_obj();
         Ok(())
     }
@@ -215,7 +183,7 @@ impl AegFileSystem {
             collections: vec!["default".to_string()],
         };
         let serialized =
-            serde_json::to_string_pretty(&lock).expect("Failed to serialize default lock");
+            serde_json::to_string_pretty(&lock).expect("Serialize failed");
         Self::write_collection_lock_json(&serialized, auth_key);
     }
 
@@ -269,14 +237,12 @@ impl AegCore {
             collections: self.collections.clone(),
         };
         let json =
-            serde_json::to_string_pretty(&lock).expect("Failed to serialize collection lock");
+            serde_json::to_string_pretty(&lock).expect("Serialize failed");
         let auth_key = AegFileSystem::read_authorization_key();
 
-        // Write JSON to disk first
         let path = AegFileSystem::get_config_path().join(STORE_COLLECTION);
-        fs::write(&path, json.clone()).expect("Failed to write collection.lock");
+        fs::write(&path, json.clone()).expect("Write failed");
 
-        // Then encrypt
         AegFileSystem::write_collection_lock_json(&json, &auth_key);
     }
 
@@ -294,16 +260,14 @@ impl AegCore {
     }
 
     pub fn create_collection(name: &str) -> String {
-        // Load fresh
         let mut core = Self::load();
         if core.collections.contains(&name.to_string()) {
             return format!("✗ Collection '{}' already exists", name);
         }
 
         core.collections.push(name.to_string());
-        core.save(); // persist
+        core.save();
 
-        // reload to ensure Use sees the new collection
         let _ = Self::load();
 
         format!("✓ Collection '{}' created", name)
@@ -343,122 +307,89 @@ impl AegCore {
         }
     }
 
+    /// Insert into memory (non-blocking). Does not perform immediate disk save.
+    /// Background saver (if started) will persist this later.
     pub fn put_value(key: &str, value: &str) -> String {
         let mut engine = AegMemoryEngine::load();
         engine.insert(key, value);
-        engine.save();
-        format!("✓ Key '{}' saved in collection '{}'", key, engine.collection_name)
+        // no engine.save() here - background saver will persist
+        format!(
+            "✓ Key '{}' saved in collection '{}' (in-memory)",
+            key, engine.collection_name
+        )
     }
 
+    /// Read from memory (plaintext in RAM).
     pub fn get_value(key: &str) -> Option<String> {
         let engine = AegMemoryEngine::load();
         engine.get(key)
     }
 
+    /// Delete in-memory (non-blocking). Background saver will persist deletion later.
     pub fn delete_value(key: &str) -> String {
         let mut engine = AegMemoryEngine::load();
         if engine.get(key).is_some() {
             engine.delete(key);
-            engine.save();
-            format!("✓ Key '{}' deleted from collection '{}'", key, engine.collection_name)
+            // no engine.save() here
+            format!(
+                "✓ Key '{}' deleted from collection '{}' (in-memory)",
+                key, engine.collection_name
+            )
         } else {
-            format!("✗ Key '{}' not found in collection '{}'", key, engine.collection_name)
+            format!(
+                "✗ Key '{}' not found in collection '{}' (in-memory)",
+                key, engine.collection_name
+            )
         }
     }
 
+    /// Clear in-memory values (non-blocking). Background saver will persist later.
     pub fn clear_values() -> String {
         let mut engine = AegMemoryEngine::load();
         engine.clear();
-        format!("✓ All keys cleared from collection '{}'", engine.collection_name)
-    }
-}
-
-// ===================== PERSISTENT CACHE =====================
-#[derive(Serialize, Deserialize, Debug)]
-pub struct CacheEntry {
-    pub value: String,
-    pub expires_at: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct AegCache {
-    pub store: HashMap<String, CacheEntry>,
-}
-
-impl AegCache {
-    pub fn new() -> Self {
-        Self {
-            store: HashMap::new(),
-        }
+        format!(
+            "✓ All keys cleared from collection '{}' (in-memory)",
+            engine.collection_name
+        )
     }
 
-    fn cache_file_path() -> PathBuf {
-        let mut path = AegFileSystem::get_config_path();
-        path.push("cache.json");
-        path
+    /// Force immediate flush (saves all collections to disk synchronously).
+    pub fn flush_now() {
+        AegMemoryEngine::save_all();
     }
 
-    pub fn set(&mut self, key: &str, value: &str, ttl_seconds: Option<u64>) {
-        let expires_at = ttl_seconds.map(|ttl| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + ttl
-        });
-        self.store.insert(
-            key.to_string(),
-            CacheEntry {
-                value: value.to_string(),
-                expires_at,
-            },
-        );
+    /// Start background saver thread. Safe to call multiple times.
+    /// interval_seconds: how often to persist (e.g. 1).
+    pub fn start_background_saver(interval_seconds: u64) {
+        AegMemoryEngine::start_background_saver(interval_seconds);
     }
 
-    pub fn get(&mut self, key: &str) -> Option<String> {
-        if let Some(entry) = self.store.get(key) {
-            if let Some(expiry) = entry.expires_at {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                if now > expiry {
-                    self.store.remove(key);
-                    return None;
-                }
-            }
-            return Some(entry.value.clone());
-        }
-        None
-    }
-
-    pub fn save(&self) {
-        let path = Self::cache_file_path();
-        let data = serde_json::to_string_pretty(&self).expect("Failed to serialize cache");
-        fs::write(&path, data).expect("Failed to write cache file");
-    }
-
-    pub fn load() -> Self {
-        let path = Self::cache_file_path();
-        if path.exists() {
-            let data = fs::read_to_string(&path).expect("Failed to read cache file");
-            serde_json::from_str(&data).unwrap_or_else(|_| Self::new())
-        } else {
-            Self::new()
-        }
+    /// Signal background saver to stop. Returns immediately.
+    pub fn stop_background_saver() {
+        AegMemoryEngine::stop_background_saver();
     }
 }
 
 // ===================== IN-MEMORY ENGINE =====================
-// Simple in-memory key/value engine with JSON persistence to STORE_ENGINE_STATE.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AegMemoryEngine {
     pub store: HashMap<String, String>,
     pub collection_name: String,
 }
 
+/// SAFE GLOBAL IN-MEMORY CACHE (OnceLock + Mutex)
+static MEMORY_CACHE: OnceLock<Mutex<HashMap<String, AegMemoryEngine>>> = OnceLock::new();
+
+/// Background saver control
+static SAVER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
+static SAVER_STARTED: OnceLock<AtomicBool> = OnceLock::new();
+
 impl AegMemoryEngine {
-    /// Create a new empty engine for a specific collection
+    /// Returns a reference to the global Mutex<HashMap<...>>.
+    fn global_memory_mutex() -> &'static Mutex<HashMap<String, AegMemoryEngine>> {
+        MEMORY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     pub fn new(collection_name: &str) -> Self {
         Self {
             store: HashMap::new(),
@@ -466,102 +397,214 @@ impl AegMemoryEngine {
         }
     }
 
-    /// Path to engine_state file, including collection name
     fn engine_file_path(collection_name: &str) -> PathBuf {
         let mut path = AegFileSystem::get_config_path();
         path.push(format!("collection_{}.aekv", collection_name));
         path
     }
 
-    /// Insert or update a key
+    /// Insert into current engine and update global in-memory cache (fast).
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.store.insert(key.into(), value.into());
+        // persist to global in-memory cache (only memory)
+        let mutex = Self::global_memory_mutex();
+        let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+        guard.insert(self.collection_name.clone(), self.clone());
+        // intentionally not calling self.save() here
     }
 
-    /// Get value by key (cloned)
     pub fn get(&self, key: &str) -> Option<String> {
         self.store.get(key).cloned()
     }
 
-    /// Delete a key
     pub fn delete(&mut self, key: &str) {
         self.store.remove(key);
+        let mutex = Self::global_memory_mutex();
+        let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+        guard.insert(self.collection_name.clone(), self.clone());
+        // intentionally not calling self.save()
     }
 
-    /// List all key/value pairs
     pub fn list(&self) -> Vec<(String, String)> {
-        self.store.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.store
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
-    /// Save current engine state to disk (JSON) encrypted
-    pub fn save(&self) {
-        let path = Self::engine_file_path(&self.collection_name);
-        let json = serde_json::to_string_pretty(&self).expect("Failed to serialize engine state");
+    pub fn clear(&mut self) {
+        self.store.clear();
+        let mutex = Self::global_memory_mutex();
+        let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+        guard.insert(self.collection_name.clone(), self.clone());
+    }
 
-        // Encrypt with authorization key
+    /// Persist single engine to disk (synchronous) — same encryption as before.
+    pub fn save_to_disk(engine: &AegMemoryEngine) -> Result<(), String> {
+        let path = Self::engine_file_path(&engine.collection_name);
+
+        let json = serde_json::to_string_pretty(engine)
+            .map_err(|e| format!("serialize error: {}", e))?;
+
         let auth_key = AegFileSystem::read_authorization_key();
         let key_bytes = general_purpose::STANDARD
             .decode(auth_key)
-            .expect("Invalid base64 auth key");
+            .map_err(|e| format!("base64 decode auth key: {}", e))?;
+
         let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(&key_bytes[..12]);
 
-        let encrypted = cipher.encrypt(nonce, json.as_bytes())
-            .expect("Failed to encrypt engine state");
+        let encrypted = cipher
+            .encrypt(nonce, json.as_bytes())
+            .map_err(|e| format!("encrypt error: {:?}", e))?;
+
         let encoded = general_purpose::STANDARD.encode(&encrypted);
 
-        fs::write(&path, encoded).expect("Failed to write engine state file");
+        fs::write(&path, encoded).map_err(|e| format!("write error: {}", e))?;
+
+        Ok(())
     }
 
-    /// Load engine state from disk. If missing or invalid, returns new engine.
+    /// Save ALL collections currently in memory to disk.
+    /// This function clones the cache under the mutex and performs expensive work outside the lock.
+    pub fn save_all() {
+        // 1) Clone the memory map under the lock (minimize lock time)
+        let snapshot: HashMap<String, AegMemoryEngine> = {
+            let mutex = Self::global_memory_mutex();
+            let guard = mutex.lock().expect("Failed to lock global memory mutex");
+            guard.clone()
+        };
+
+        // 2) For each collection, perform serialization/encryption/write outside the lock
+        for (_name, engine) in snapshot.into_iter() {
+            // best-effort: log errors but continue
+            if let Err(e) = Self::save_to_disk(&engine) {
+                eprintln!("Failed to save collection '{}': {}", engine.collection_name, e);
+            }
+        }
+    }
+
+    /// Load engine from memory cache; otherwise load from disk; otherwise fresh engine.
     pub fn load() -> Self {
         let core = AegCore::load();
         let collection_name = core.active_collection.clone();
+
+        // First try in-memory (global cache)
+        {
+            let mutex = Self::global_memory_mutex();
+            let guard = mutex.lock().expect("Failed to lock global memory mutex");
+            if let Some(engine) = guard.get(&collection_name).cloned() {
+                return engine;
+            }
+        }
+
+        // If not in memory, load from disk
         let path = Self::engine_file_path(&collection_name);
 
         if path.exists() {
             let encrypted = fs::read_to_string(&path).unwrap_or_default();
             if encrypted.trim().is_empty() {
-                return Self::new(&collection_name);
+                let engine = Self::new(&collection_name);
+                // store in memory
+                let mutex = Self::global_memory_mutex();
+                let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+                guard.insert(collection_name.clone(), engine.clone());
+                return engine;
             }
 
             let auth_key = AegFileSystem::read_authorization_key();
-            let key_bytes = general_purpose::STANDARD
-                .decode(auth_key)
-                .expect("Invalid base64 auth key");
-            let key: &aes_gcm::Key<Aes256Gcm> = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+            let key_bytes =
+                general_purpose::STANDARD.decode(auth_key).expect("Invalid base64");
+
+            let key: &aes_gcm::Key<Aes256Gcm> =
+                aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
             let cipher = Aes256Gcm::new(key);
+
             let nonce = Nonce::from_slice(&key_bytes[..12]);
 
-            if let Ok(encrypted_bytes) = general_purpose::STANDARD.decode(encrypted) {
-                if let Ok(decrypted) = cipher.decrypt(nonce, encrypted_bytes.as_ref()) {
-                    if let Ok(engine) = serde_json::from_slice::<AegMemoryEngine>(&decrypted) {
-                        return engine;
-                    }
-                }
-            }
+            let decoded =
+                general_purpose::STANDARD.decode(encrypted).expect("Invalid base64");
+
+            let decrypted = cipher
+                .decrypt(nonce, decoded.as_ref())
+                .expect("Decrypt failed");
+
+            let engine: AegMemoryEngine =
+                serde_json::from_slice(&decrypted).unwrap_or(Self::new(&collection_name));
+
+            // Store to in-memory cache
+            let mutex = Self::global_memory_mutex();
+            let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+            guard.insert(collection_name.clone(), engine.clone());
+
+            return engine;
         }
 
-        Self::new(&collection_name)
+        // Fresh engine
+        let engine = Self::new(&collection_name);
+        let mutex = Self::global_memory_mutex();
+        let mut guard = mutex.lock().expect("Failed to lock global memory mutex");
+        guard.insert(collection_name.clone(), engine.clone());
+        engine
     }
 
-    /// Clear the engine and persist an empty state
-    pub fn clear(&mut self) {
-        self.store.clear();
-        self.save();
+    /// Start a background thread to periodically save memory to disk.
+    /// If already started, this is a no-op.
+    pub fn start_background_saver(interval_seconds: u64) {
+        // initialize the running flag (if not already)
+        let running = SAVER_RUNNING.get_or_init(|| AtomicBool::new(false));
+        let started_flag = SAVER_STARTED.get_or_init(|| AtomicBool::new(false));
+
+        // if already started, do nothing
+        if started_flag.load(Ordering::SeqCst) {
+            return;
+        }
+
+        // mark running
+        running.store(true, Ordering::SeqCst);
+        // mark started
+        started_flag.store(true, Ordering::SeqCst);
+
+        // spawn detached thread
+        let running_ref: &'static AtomicBool = running;
+        thread::spawn(move || {
+            let interval = Duration::from_secs(interval_seconds.max(1));
+            while running_ref.load(Ordering::SeqCst) {
+                // save snapshot
+                Self::save_all();
+                // sleep for interval (cooperative)
+                sleep(interval);
+            }
+            // final flush on exit attempt
+            Self::save_all();
+        });
+    }
+
+    /// Signal the background saver to stop. Thread is detached so we can't join; this just signals termination.
+    pub fn stop_background_saver() {
+        if let Some(running) = SAVER_RUNNING.get() {
+            running.store(false, Ordering::SeqCst);
+        }
+        if let Some(started) = SAVER_STARTED.get() {
+            started.store(false, Ordering::SeqCst);
+        }
     }
 }
 
-// Small convenience wrapper for common operations used by the daemon. This keeps
-// API calls short and mirrors the pattern used in earlier Aeg* structs.
-impl Default for AegMemoryEngine {
-    fn default() -> Self {
-        Self::load()
-    }
-}
-
-// Example helpers that tie collections to engine filenames could be added here.
-// For example, if you want per-collection engine files, you could change
-// engine_file_path to include the active collection name from AegCore.
-
+// ===================== USAGE GUIDE =====================
+//
+// During startup:
+// AegFileSystem::initialize_config(None, None);   // prepares configuration files
+// AegCore::start_background_saver(1);             // enables automatic persistence (1-second interval)
+//
+// Normal operations use:
+// AegCore::put_value(...);
+// AegCore::get_value(...);
+//
+// For an immediate write to disk:
+// AegCore::flush_now();
+//
+// At application shutdown:
+// AegCore::stop_background_saver();               // stops the background thread
+// AegCore::flush_now();                           // optional final save

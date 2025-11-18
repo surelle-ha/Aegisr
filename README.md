@@ -83,9 +83,9 @@ This document tracks the evolution of Aegisr's performance across versions. Metr
 ## Benchmark Table
 
 | **Version** | **Date** | **Put Ops/sec** | **Get Ops/sec** | **Put Latency (µs)** | **Get Latency (µs)** | **Notes** |
-|-------------|----------|----------------|----------------|---------------------|---------------------|-----------|
-| 1.0.1-beta  | 2025-11-17 | 7,000          | 100,000        | 136–145             | 9–10                | Initial benchmark with 100 measurements. Found some outliers (7% put, 8% get). |
-| 1.0.2-beta  | TBD      | TBD            | TBD            | TBD                 | TBD                 | TBD       |
+|-------------|----------|----------------|----------------|--------------------|--------------------|-----------|
+| 1.0.1-beta  | 2025-11-17 | ~7,000          | ~100,000        | 136–145               | 9–10                  | Initial benchmark with 100 measurements. Found some outliers (7% put, 8% get). |
+| 1.0.2-beta  | 2025-11-18 | ~122,000        | ~127,000        | 4.56–5.06             | 4.11–4.17             | Huge performance jump due to removal of autosave from every put/get. Outliers: 7–8% mild/high. |
 
 ## How to Update
 
