@@ -108,6 +108,7 @@ impl AegDaemon {
     }
 
     pub async fn start(&self) {
+        AegCore::start_background_saver(1);
         AegFileSystem::validate_files();
         init_tracing(&self.logger_cfg);
         self.print_banner();
@@ -128,37 +129,40 @@ impl AegDaemon {
 
         loop {
             tokio::select! {
-                                    Ok((mut socket, addr)) = listener.accept() => {
-                                        info!(%addr, "Client connected");
+                Ok((mut socket, addr)) = listener.accept() => {
+                    info!(%addr, "Client connected");
 
-                                        tokio::spawn(async move {
-                                            let mut buffer = vec![0u8; 4096];
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0u8; 4096];
 
-                                            match socket.read(&mut buffer).await {
-                                                Ok(n) if n > 0 => {
-                                                    let data = &buffer[..n];
-                                                    let response_json = match serde_json::from_slice::<AegisrCommand>(data) {
-                                                    Ok(cmd) => handle_command(cmd).await.to_json(),
-                                                        Err(_) => serde_json::to_string(&json!({
-                                                            "status": "error",
-                                                            "message": "Invalid command"
-                                                        })).unwrap(),
-                                                    };
-                                                    if let Err(e) = socket.write_all(response_json.as_bytes()).await {
-                                                        error!(%e, "Failed sending response");
-                                                    }
-                                                }
-                                                Ok(_) => debug!("Connection closed without data"),
-                                                Err(e) => error!(%e, "Socket read error"),
-                                            }
-                                        });
-                                    }
-
-                                    _ = signal::ctrl_c() => {
-                                        info!("Ctrl+C detected — shutting down daemon");
-                                        break;
-                                    }
+                        match socket.read(&mut buffer).await {
+                            Ok(n) if n > 0 => {
+                                let data = &buffer[..n];
+                                let response_json = match serde_json::from_slice::<AegisrCommand>(data) {
+                                Ok(cmd) => handle_command(cmd).await.to_json(),
+                                    Err(_) => serde_json::to_string(&json!({
+                                        "status": "error",
+                                        "message": "Invalid command"
+                                    })).unwrap(),
+                                };
+                                if let Err(e) = socket.write_all(response_json.as_bytes()).await {
+                                    error!(%e, "Failed sending response");
                                 }
+                            }
+                            Ok(_) => debug!("Connection closed without data"),
+                            Err(e) => error!(%e, "Socket read error"),
+                        }
+                    });
+                }
+
+                _ = signal::ctrl_c() => {
+                    info!("Ctrl+C detected — shutting down daemon");
+                    AegCore::stop_background_saver();
+                    AegCore::flush_now();
+
+                    break;
+                }
+            }
         }
 
         info!("Daemon shutdown complete");
@@ -193,18 +197,16 @@ enum CommandResult {
 impl CommandResult {
     fn to_json(&self) -> String {
         match self {
-            CommandResult::Text { message, success } => {
-                serde_json::to_string(&json!({
-                    "status": if *success { "ok" } else { "error" },
-                    "message": message
-                })).unwrap()
-            }
-            CommandResult::List { items, success } => {
-                serde_json::to_string(&json!({
-                    "status": if *success { "ok" } else { "error" },
-                    "data": items
-                })).unwrap()
-            }
+            CommandResult::Text { message, success } => serde_json::to_string(&json!({
+                "status": if *success { "ok" } else { "error" },
+                "message": message
+            }))
+                .unwrap(),
+            CommandResult::List { items, success } => serde_json::to_string(&json!({
+                "status": if *success { "ok" } else { "error" },
+                "data": items
+            }))
+                .unwrap(),
         }
     }
 }
@@ -213,32 +215,59 @@ async fn handle_command(cmd: AegisrCommand) -> CommandResult {
     match cmd {
         AegisrCommand::New { verbose, name } => {
             let resp = AegCore::create_collection(&name);
-            if verbose { info!("Verbose: {}", resp); }
-            CommandResult::Text { message: resp, success: true }
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
+            }
         }
         AegisrCommand::List => {
             let engine: AegCore = AegCore::load();
             if engine.collections.is_empty() {
-                CommandResult::Text { message: "No collections found".into(), success: true }
+                CommandResult::Text {
+                    message: "No collections found".into(),
+                    success: true,
+                }
             } else {
-                CommandResult::List { items: engine.collections.clone(), success: true }
+                CommandResult::List {
+                    items: engine.collections.clone(),
+                    success: true,
+                }
             }
         }
         AegisrCommand::Delete { verbose, name } => {
             let resp = AegCore::delete_collection(&name);
-            if verbose { info!("Verbose: {}", resp); }
-            CommandResult::Text { message: resp, success: true }
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
+            }
         }
-        AegisrCommand::Rename { verbose, name, new_name } => {
+        AegisrCommand::Rename {
+            verbose,
+            name,
+            new_name,
+        } => {
             let resp = AegCore::rename_collection(&name, &new_name);
-            if verbose { info!("Verbose: {}", resp); }
-            CommandResult::Text { message: resp, success: true }
+            if verbose {
+                info!("Verbose: {}", resp);
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
+            }
         }
         AegisrCommand::Use { verbose, name } => {
             let mut engine = AegCore::load();
             match engine.set_active_collection(&name) {
                 Ok(_) => {
-                    if verbose { info!("Verbose: switched to '{}'", name); }
+                    if verbose {
+                        info!("Verbose: switched to '{}'", name);
+                    }
                     CommandResult::Text {
                         message: format!("Active Collection set to '{}'", name),
                         success: true,
@@ -267,9 +296,14 @@ async fn handle_command(cmd: AegisrCommand) -> CommandResult {
                 engine.active_collection = engine.collections[0].clone();
             }
             engine.save();
-            if verbose { info!("Verbose: init completed at {}", config_path.display()); }
+            if verbose {
+                info!("Verbose: init completed at {}", config_path.display());
+            }
             CommandResult::Text {
-                message: format!("Engine initialized. Active Collection: {}", engine.get_active_collection()),
+                message: format!(
+                    "Engine initialized. Active Collection: {}",
+                    engine.get_active_collection()
+                ),
                 success: true,
             }
         }
@@ -280,32 +314,59 @@ async fn handle_command(cmd: AegisrCommand) -> CommandResult {
                 success: true,
             }
         }
-        AegisrCommand::Put { verbose, key, value } => {
+        AegisrCommand::Put {
+            verbose,
+            key,
+            value,
+        } => {
             let resp = AegCore::put_value(&key, &value);
-            if verbose { info!("Verbose: PUT {} = {}", key, value); }
-            CommandResult::Text { message: resp, success: true }
-        }
-        AegisrCommand::Get { verbose, key } => {
-            match AegCore::get_value(&key) {
-                Some(v) => {
-                    if verbose { info!("Verbose: GET {} = {}", key, v); }
-                    CommandResult::Text { message: v, success: true }
-                }
-                None => {
-                    if verbose { warn!("Verbose: GET {} not found", key); }
-                    CommandResult::Text { message: "Key not found".into(), success: false }
-                }
+            if verbose {
+                info!("Verbose: PUT {} = {}", key, value);
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
             }
         }
+        AegisrCommand::Get { verbose, key } => match AegCore::get_value(&key) {
+            Some(v) => {
+                if verbose {
+                    info!("Verbose: GET {} = {}", key, v);
+                }
+                CommandResult::Text {
+                    message: v,
+                    success: true,
+                }
+            }
+            None => {
+                if verbose {
+                    warn!("Verbose: GET {} not found", key);
+                }
+                CommandResult::Text {
+                    message: "Key not found".into(),
+                    success: false,
+                }
+            }
+        },
         AegisrCommand::Del { verbose, key } => {
             let resp = AegCore::delete_value(&key);
-            if verbose { info!("Verbose: DEL {}", key); }
-            CommandResult::Text { message: resp, success: true }
+            if verbose {
+                info!("Verbose: DEL {}", key);
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
+            }
         }
         AegisrCommand::Clear { verbose } => {
             let resp = AegCore::clear_values();
-            if verbose { info!("Verbose: CLEAR all values"); }
-            CommandResult::Text { message: resp, success: true }
+            if verbose {
+                info!("Verbose: CLEAR all values");
+            }
+            CommandResult::Text {
+                message: resp,
+                success: true,
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 use aegisr_engine::{AegisrCommand, Commands, ENGINE_DEVELOPER, ENGINE_NAME, ENGINE_VERSION};
 use clap::Parser;
 use colored::Colorize;
-use serde_json::{Value,json};
+use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -21,21 +21,52 @@ impl AegTerminal {
             Duration::from_secs(1),
         ) {
             Ok(s) => s,
-            Err(_) => { eprintln!("{}", "Error: daemon not running.".red()); std::process::exit(1); }
+            Err(_) => {
+                eprintln!("{}", "Error: daemon not running.".red());
+                std::process::exit(1);
+            }
         };
 
         let cmd = match &cli.command {
-            Commands::Init(args) => AegisrCommand::Init { verbose: args.verbose, reset: args.reset },
+            Commands::Init(args) => AegisrCommand::Init {
+                verbose: args.verbose,
+                reset: args.reset,
+            },
             Commands::List => AegisrCommand::List,
-            Commands::Use(args) => AegisrCommand::Use { verbose: args.verbose, name: args.name.clone() },
-            Commands::New(args) => AegisrCommand::New { verbose: args.verbose, name: args.name.clone() },
-            Commands::Delete(args) => AegisrCommand::Delete { verbose: args.verbose, name: args.name.clone() },
-            Commands::Rename(args) => AegisrCommand::Rename { verbose: args.verbose, name: args.name.clone(), new_name: args.new_name.clone() },
+            Commands::Use(args) => AegisrCommand::Use {
+                verbose: args.verbose,
+                name: args.name.clone(),
+            },
+            Commands::New(args) => AegisrCommand::New {
+                verbose: args.verbose,
+                name: args.name.clone(),
+            },
+            Commands::Delete(args) => AegisrCommand::Delete {
+                verbose: args.verbose,
+                name: args.name.clone(),
+            },
+            Commands::Rename(args) => AegisrCommand::Rename {
+                verbose: args.verbose,
+                name: args.name.clone(),
+                new_name: args.new_name.clone(),
+            },
             Commands::Status => AegisrCommand::Status,
-            Commands::Put(args) => AegisrCommand::Put { verbose: args.verbose, key: args.key.clone(), value: args.value.clone() },
-            Commands::Get(args) => AegisrCommand::Get { verbose: args.verbose, key: args.key.clone() },
-            Commands::Del(args) => AegisrCommand::Del { verbose: args.verbose, key: args.key.clone() },
-            Commands::Clear(args) => AegisrCommand::Clear { verbose: args.verbose },
+            Commands::Put(args) => AegisrCommand::Put {
+                verbose: args.verbose,
+                key: args.key.clone(),
+                value: args.value.clone(),
+            },
+            Commands::Get(args) => AegisrCommand::Get {
+                verbose: args.verbose,
+                key: args.key.clone(),
+            },
+            Commands::Del(args) => AegisrCommand::Del {
+                verbose: args.verbose,
+                key: args.key.clone(),
+            },
+            Commands::Clear(args) => AegisrCommand::Clear {
+                verbose: args.verbose,
+            },
         };
 
         let cmd_bytes = serde_json::to_vec(&cmd).unwrap();
@@ -49,7 +80,6 @@ impl AegTerminal {
         } else {
             println!("{}", String::from_utf8_lossy(&response[..n]).red());
         }
-
     }
 }
 
