@@ -11,44 +11,65 @@ on:
 jobs:
   build-and-release:
     permissions:
-        contents: write
+      contents: write
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         platform: [x86_64-unknown-linux-gnu]
 
     steps:
-      # 1. Checkout code
       - uses: actions/checkout@v3
 
-      # 2. Setup Rust toolchain
+      - name: Extract Version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "version=dev" >> $GITHUB_OUTPUT
+          fi
+
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
 
-      # 3. Build release binaries
       - name: Build Release
         run: cargo build --release --target ${{ matrix.platform }}
 
-      # 4. Package artifacts
       - name: Package Artifact
         run: |
           mkdir -p release
-          if [[ "${{ matrix.platform }}" == "x86_64-unknown-linux-gnu" ]]; then
-            tar -czvf release/aegisr-linux.tar.gz -C target/${{ matrix.platform }}/release aegisr aegisr-daemon
-          elif [[ "${{ matrix.platform }}" == "x86_64-pc-windows-gnu" ]]; then
-            powershell Compress-Archive -Path target\${{ matrix.platform }}\release\aegisr.exe,target\${{ matrix.platform }}\release\aegisr-daemon.exe -DestinationPath release\aegisr-windows.zip
-          elif [[ "${{ matrix.platform }}" == "x86_64-apple-darwin" ]]; then
-            tar -czvf release/aegisr-macos.tar.gz -C target/${{ matrix.platform }}/release aegisr aegisr-daemon
-          fi
+          cp target/${{ matrix.platform }}/release/aegisr release/aegisr-${{ matrix.platform }}
+          cp target/${{ matrix.platform }}/release/aegisr-daemon release/aegisr-daemon-${{ matrix.platform }}
 
-      # 5. Upload artifacts to GitHub Release
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/aegisr:${{ steps.version.outputs.version }} .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/aegisr:${{ steps.version.outputs.version }} \
+                     ${{ secrets.DOCKERHUB_USERNAME }}/aegisr:latest
+
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/aegisr:${{ steps.version.outputs.version }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/aegisr:latest
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: release/*
+          files: |
+            release/aegisr-${{ matrix.platform }}
+            release/aegisr-daemon-${{ matrix.platform }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

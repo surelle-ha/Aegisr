@@ -1,7 +1,7 @@
 use aegisr_engine::{AegisrCommand, Commands, ENGINE_DEVELOPER, ENGINE_NAME, ENGINE_VERSION};
 use clap::Parser;
 use colored::Colorize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
