@@ -16,7 +16,7 @@ dependencies = [
 name = "aegisr"
 version = "1.0.2-beta"
 dependencies = [
- "aegisr_engine",
+ "aegisrlib",
  "clap",
  "colored",
  "criterion",
@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegisr_engine"
+name = "aegisrlib"
 version = "1.0.0"
 dependencies = [
  "aes-gcm",

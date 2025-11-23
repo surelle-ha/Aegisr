@@ -1,4 +1,4 @@
-use aegisr_engine::{AegCore, AegFileSystem, AegisrCommand};
+use aegisrlib::{AegCore, AegFileSystem, AegisrCommand};
 use clap::Parser;
 use hostname::get as get_hostname;
 use serde::{Deserialize, Serialize};
@@ -211,6 +211,8 @@ impl CommandResult {
     }
 }
 
+/// TODO: Destructure this function into smaller parts
+/// TODO: Rename handle_command to tcp_responder
 async fn handle_command(cmd: AegisrCommand) -> CommandResult {
     match cmd {
         AegisrCommand::New { verbose, name } => {

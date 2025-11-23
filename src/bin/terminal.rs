@@ -1,4 +1,4 @@
-use aegisr_engine::{AegisrCommand, Commands, ENGINE_DEVELOPER, ENGINE_NAME, ENGINE_VERSION};
+use aegisrlib::{AegisrCommand, Commands, ENGINE_DEVELOPER, ENGINE_NAME, ENGINE_VERSION};
 use clap::Parser;
 use colored::Colorize;
 use serde_json::Value;
@@ -14,6 +14,8 @@ pub struct AegTerminal {
 }
 
 impl AegTerminal {
+    
+    /// TODO: Accept optional host and port arguments to connect to a remote daemon.
     pub fn start() {
         let cli = AegTerminal::parse();
         let mut stream = match TcpStream::connect_timeout(

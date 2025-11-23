@@ -20,7 +20,7 @@ path = "src/bin/daemon.rs"
 
 [dependencies]
 colored = "3.0.0"
-aegisr_engine = { path = "./lib/aegisr_engine" }
+aegisrlib = { path = "lib/aegisrlib" }
 tokio = { version = "1", features = ["full", "macros"] }
 clap = { version = "4.5.51", features = ["derive"] }
 serde = "1.0.228"

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use aegisr_engine::{AegFileSystem, AegCore as EngineCore};
+use aegisrlib::{AegFileSystem, AegCore as EngineCore};
 fn benchmark_put_get(c: &mut Criterion) {
     // Ensure clean environment
     AegFileSystem::reset_files();
